@@ -1,0 +1,1690 @@
+class GifMemeGenerator {
+    constructor() {
+    this.apiKey = localStorage.getItem('tenorApiKey') || '';
+        this.selectedGif = null;
+        this.gifFrames = [];
+        this.currentFrame = 0;
+        this.isPlaying = true;
+        this.animationId = null;
+        this.textOverlays = [];
+        this.canvas = null;
+        this.ctx = null;
+        this.gifWorker = null;
+    this.searchState = { query: '', pos: null, prevStack: [], page: 1, lastNextPos: null, limit: 20 };
+        
+        this.init();
+    }
+
+    // Get canvas position and size relative to the overlay root
+    getCanvasRectRelative() {
+        const root = document.getElementById('textOverlays');
+        const canvasEl = this.canvas;
+        const rootRect = root.getBoundingClientRect();
+        const canvasRect = canvasEl.getBoundingClientRect();
+        return {
+            left: canvasRect.left - rootRect.left,
+            top: canvasRect.top - rootRect.top,
+            width: canvasRect.width,
+            height: canvasRect.height
+        };
+    }
+
+    /**
+     * Lightweight validation of a GIF Blob / ArrayBuffer
+     * Returns an object with metadata & potential warnings.
+     */
+    async validateGif(blob) {
+        try {
+            const buf = blob instanceof Blob ? new Uint8Array(await blob.arrayBuffer()) : new Uint8Array(blob);
+            const text = (i,l)=>String.fromCharCode(...buf.slice(i,i+l));
+            const out = { ok:true, warnings:[], width:null, height:null, frames:0, hasLoop:false };
+            if (buf.length < 20 || text(0,3) !== 'GIF') {
+                out.ok = false; out.warnings.push('Not a GIF header'); return out;
+            }
+            // Logical Screen Descriptor
+            out.width = buf[6] | (buf[7]<<8);
+            out.height = buf[8] | (buf[9]<<8);
+            let p = 10;
+            const packed = buf[p++]; // GCTF etc
+            const hasGCT = (packed & 0x80) !== 0;
+            const gctSize = hasGCT ? 3 * (1 << ((packed & 0x07) + 1)) : 0;
+            p += 2; // bg + aspect
+            p += gctSize;
+            let localPalettes = 0;
+            let gceBlocks = 0;
+            while (p < buf.length) {
+                const b = buf[p++];
+                if (b === 0x3B) { // trailer
+                    break;
+                } else if (b === 0x21) { // extension
+                    const label = buf[p++];
+                    if (label === 0xF9) { // GCE
+                        gceBlocks++;
+                        const blockSize = buf[p++];
+                        p += blockSize; // skip fields
+                        p++; // block terminator
+                    } else if (label === 0xFF) { // application extension
+                        const blockSize = buf[p++];
+                        const appId = text(p, blockSize);
+                        p += blockSize;
+                        // data sub-blocks
+                        while (p < buf.length && buf[p] !== 0) {
+                            const sz = buf[p++]; p += sz;
+                        }
+                        p++; // terminator
+                        if (/NETSCAPE/i.test(appId)) out.hasLoop = true;
+                    } else {
+                        // skip generic extension
+                        const blockSize2 = buf[p++]; p += blockSize2;
+                        while (p < buf.length && buf[p] !== 0) { const sz = buf[p++]; p += sz; }
+                        p++;
+                    }
+                } else if (b === 0x2C) { // Image descriptor
+                    out.frames++;
+                    p += 8; // left top width height
+                    const packedImg = buf[p++];
+                    const hasLCT = (packedImg & 0x80) !== 0;
+                    if (hasLCT) {
+                        localPalettes++;
+                        const lctSize = 3 * (1 << ((packedImg & 0x07) + 1));
+                        p += lctSize;
+                    }
+                    p++; // LZW min code size
+                    while (p < buf.length && buf[p] !== 0) { const sz = buf[p++]; p += sz; }
+                    p++; // terminator
+                } else {
+                    // Unknown byte – abort
+                    out.warnings.push('Unexpected block 0x'+b.toString(16));
+                    break;
+                }
+            }
+            if (!hasGCT) out.warnings.push('No global color table');
+            if (localPalettes > 0) out.warnings.push(localPalettes+ ' local color tables');
+            if (gceBlocks === 0) out.warnings.push('No Graphic Control Extensions');
+            if (!out.hasLoop) out.warnings.push('No NETSCAPE loop extension');
+            if (out.frames > 180) out.warnings.push('Large frame count: '+out.frames);
+            if (out.warnings.length) out.ok = out.warnings.length < 3; // heuristic
+            return out;
+        } catch (e) {
+            return { ok:false, error:e.message, warnings:['Validate exception'] };
+        }
+    }
+
+    /** Resolve a usable gif.js worker script URL with preference order:
+     * 1. Same-origin gif.worker.js if present
+     * 2. Already provided window.__gifWorkerUrl (cached)
+     * 3. CDN fallback
+     * Returns null if none confidently available.
+     */
+    getWorkerScriptUrl() {
+        if (this._workerUrlChecked) return this._resolvedWorkerUrl || null;
+        this._workerUrlChecked = true;
+        // Same-origin guess
+        const local = `${location.origin}/gif.worker.js`;
+        // Heuristic: if page served over http(s) and not a file:// assume reachable; we can't sync check existence without HEAD.
+        if (/^https?:/.test(location.origin)) {
+            this._resolvedWorkerUrl = local;
+        }
+        // Allow override via global
+        if (window.__gifWorkerUrl) {
+            this._resolvedWorkerUrl = window.__gifWorkerUrl;
+        }
+        // Fallback CDN last
+        if (!this._resolvedWorkerUrl) {
+            this._resolvedWorkerUrl = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js';
+        }
+        return this._resolvedWorkerUrl;
+    }
+
+    init() {
+        this.setupEventListeners();
+        this.loadApiKey();
+        this.setupCanvas();
+    }
+
+    setupEventListeners() {
+        // API Key management
+        document.getElementById('saveKeyBtn').addEventListener('click', () => this.saveApiKey());
+        document.getElementById('apiKeyInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.saveApiKey();
+        });
+
+        // Search functionality
+        document.getElementById('searchBtn').addEventListener('click', () => this.searchGifs());
+        document.getElementById('searchInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.searchGifs();
+        });
+        const prevBtn = document.getElementById('prevPageBtn');
+        const nextBtn = document.getElementById('nextPageBtn');
+        if (prevBtn) prevBtn.addEventListener('click', () => this.prevSearchPage());
+        if (nextBtn) nextBtn.addEventListener('click', () => this.nextSearchPage());
+
+        // Text controls
+        document.getElementById('addTextBtn').addEventListener('click', () => this.addTextOverlay());
+        document.getElementById('clearTextBtn').addEventListener('click', () => this.clearAllText());
+        document.getElementById('textInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.addTextOverlay();
+        });
+
+        // Font controls
+        document.getElementById('fontSize').addEventListener('input', (e) => {
+            document.getElementById('fontSizeValue').textContent = e.target.value + 'px';
+        });
+        
+        document.getElementById('strokeWidth').addEventListener('input', (e) => {
+            document.getElementById('strokeWidthValue').textContent = e.target.value + 'px';
+        });
+
+        // Playback controls
+        document.getElementById('playPauseBtn').addEventListener('click', () => this.togglePlayback());
+        document.getElementById('prevFrameBtn').addEventListener('click', () => this.previousFrame());
+        document.getElementById('nextFrameBtn').addEventListener('click', () => this.nextFrame());
+
+        // GIF generation
+        document.getElementById('generateGifBtn').addEventListener('click', () => this.generateGif());
+        document.getElementById('quickGifBtn').addEventListener('click', () => this.generateQuickGif());
+    const compatBtn = document.getElementById('compatGifBtn');
+    if (compatBtn) compatBtn.addEventListener('click', () => this.generateCompatGif());
+    }
+
+    loadApiKey() {
+        if (this.apiKey) {
+            document.getElementById('apiKeyInput').value = this.apiKey;
+            document.getElementById('giphyKey').style.display = 'none';
+        }
+    }
+
+    saveApiKey() {
+        const keyInput = document.getElementById('apiKeyInput');
+        this.apiKey = keyInput.value.trim();
+        
+        if (this.apiKey) {
+            localStorage.setItem('tenorApiKey', this.apiKey);
+            document.getElementById('giphyKey').style.display = 'none';
+            this.showMessage('API key saved successfully!', 'success');
+        } else {
+            this.showMessage('Please enter a valid API key', 'error');
+        }
+    }
+
+    async searchGifs() {
+        if (!this.apiKey) {
+            this.showMessage('Please enter your Tenor API key first', 'error');
+            document.getElementById('giphyKey').style.display = 'block';
+            return;
+        }
+
+        const query = document.getElementById('searchInput').value.trim();
+        if (!query) {
+            this.showMessage('Please enter a search term', 'error');
+            return;
+        }
+
+        const searchBtn = document.getElementById('searchBtn');
+        const originalText = searchBtn.textContent;
+        searchBtn.innerHTML = 'Searching... <span class="loading"></span>';
+        searchBtn.disabled = true;
+
+        try {
+            // Reset pagination state for a new query
+            this.searchState = { query, pos: null, prevStack: [], page: 1, lastNextPos: null, limit: 20 };
+            await this.fetchSearchPage();
+        } catch (error) {
+            console.error('Error searching GIFs:', error);
+            this.showMessage('Error searching GIFs. Please check your API key and try again.', 'error');
+        } finally {
+            searchBtn.textContent = originalText;
+            searchBtn.disabled = false;
+        }
+    }
+
+    async fetchSearchPage(posOverride=null) {
+        const resultsContainer = document.getElementById('gifResults');
+        const pagination = document.getElementById('pagination');
+        if (pagination) pagination.style.display = 'none';
+        resultsContainer.innerHTML = '<p style="color:#fff;opacity:.8;">Loading…</p>';
+    const { query, limit } = this.searchState;
+        // Tenor Search v2
+        const params = new URLSearchParams({
+            key: this.apiKey,
+            q: query,
+            limit: String(limit),
+            media_filter: 'gif',
+            ar_range: 'standard',
+            client_key: 'memegifgenerator'
+        });
+        const pos = posOverride !== null ? posOverride : this.searchState.pos;
+        if (pos) params.set('pos', pos);
+        const response = await fetch(`https://tenor.googleapis.com/v2/search?${params.toString()}`);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        const results = (data.results || []).map(item => {
+            const media = item.media_formats || {};
+            const gifUrl = media.gif ? media.gif.url : (media.mediumgif ? media.mediumgif.url : (media.tinygif ? media.tinygif.url : ''));
+            const previewUrl = media.tinygif ? media.tinygif.url : gifUrl;
+            return {
+                id: item.id,
+                title: item.content_description || item.title || 'Tenor GIF',
+                images: {
+                    fixed_height: { url: previewUrl },
+                    original: { url: gifUrl }
+                }
+            };
+        }).filter(x => x.images.original.url);
+        this.searchState.lastNextPos = data.next || null;
+        this.displayGifResults(results);
+        this.updatePaginationUI();
+    }
+
+    updatePaginationUI() {
+        const pagination = document.getElementById('pagination');
+        const prevBtn = document.getElementById('prevPageBtn');
+        const nextBtn = document.getElementById('nextPageBtn');
+        const pageInfo = document.getElementById('pageInfo');
+        const hasResults = document.getElementById('gifResults').children.length > 0;
+        if (!pagination) return;
+    if (!hasResults) { pagination.style.display = 'none'; return; }
+    // Force-show pagination once we have any results
+    pagination.style.display = 'flex';
+        if (pageInfo) pageInfo.textContent = `Page ${this.searchState.page}`;
+        if (prevBtn) prevBtn.disabled = this.searchState.page <= 1;
+        if (nextBtn) nextBtn.disabled = !this.searchState.lastNextPos;
+    }
+
+    async nextSearchPage() {
+        if (!this.searchState.lastNextPos) return;
+        // push current pos into stack for prev nav
+        this.searchState.prevStack.push(this.searchState.pos);
+        this.searchState.pos = this.searchState.lastNextPos;
+        this.searchState.page += 1;
+        await this.fetchSearchPage();
+    }
+
+    async prevSearchPage() {
+        if (this.searchState.page <= 1) return;
+        const prevPos = this.searchState.prevStack.pop() || null;
+        this.searchState.pos = prevPos;
+        this.searchState.page = Math.max(1, this.searchState.page - 1);
+        await this.fetchSearchPage();
+    }
+
+    displayGifResults(gifs) {
+        const resultsContainer = document.getElementById('gifResults');
+        resultsContainer.innerHTML = '';
+
+        if (gifs.length === 0) {
+            resultsContainer.innerHTML = '<p>No GIFs found. Try a different search term.</p>';
+            return;
+        }
+
+        gifs.forEach(gif => {
+            const gifElement = document.createElement('div');
+            gifElement.className = 'gif-item fade-in';
+            gifElement.innerHTML = `
+                <img src="${gif.images.fixed_height.url}" alt="${gif.title}" />
+                <p style="margin-top: 8px; font-size: 12px; color: #666;">${gif.title}</p>
+            `;
+            
+            gifElement.addEventListener('click', () => this.selectGif(gif));
+            resultsContainer.appendChild(gifElement);
+        });
+    }
+
+    async selectGif(gif) {
+        // When choosing a new GIF we need to fully reset transient state so
+        // previously decoded frames, animation loops and overlays don't
+        // conflict and cause a blank canvas or mixed frames.
+        this.resetForNewGif();
+        this.selectedGif = gif;
+        const editor = document.getElementById('editorSection');
+        editor.style.display = 'block';
+        requestAnimationFrame(() => editor.classList.add('active'));
+        editor.scrollIntoView({ behavior: 'smooth' });
+
+        await this.loadGifFrames(gif.images.original.url);
+        this.showMessage('GIF loaded! Add text and customize your meme.', 'success');
+    }
+
+    setupCanvas() {
+        this.canvas = document.getElementById('gifCanvas');
+        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    }
+
+    // Reset state when a new GIF is selected
+    resetForNewGif() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+            this.animationId = null;
+        }
+        this.isPlaying = true;
+        this.currentFrame = 0;
+        this.gifFrames = [];
+        this.originalGifUrl = null;
+        this.frameDelay = 100;
+        this.textOverlays = [];
+        const overlayRoot = document.getElementById('textOverlays');
+        if (overlayRoot) overlayRoot.innerHTML = '';
+        if (this.ctx && this.canvas) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+        // Restore quality preset selection
+        this.loadQualityPreset();
+    }
+
+    // Load quality preset from localStorage
+    loadQualityPreset() {
+        const preset = localStorage.getItem('qualityPreset') || 'balanced';
+        const sel = document.getElementById('qualityPreset');
+        if (sel) sel.value = preset;
+        this.qualityPreset = preset;
+        // Attach change listener once
+        if (!this._qualityBound) {
+            this._qualityBound = true;
+            if (sel) {
+                sel.addEventListener('change', () => {
+                    this.qualityPreset = sel.value;
+                    localStorage.setItem('qualityPreset', this.qualityPreset);
+                    this.showMessage(`Quality preset: ${this.qualityPreset}`, 'info');
+                });
+            }
+        }
+    }
+
+    // Determine encoding settings based on frame count and preset
+    getEncodingSettings() {
+        this.loadQualityPreset();
+        const frameCount = this.gifFrames.length || 1;
+        const avgDelay = this.gifFrames.reduce((a, f) => a + (f.delay || this.frameDelay || 100), 0) / frameCount;
+        const originalFps = 1000 / (avgDelay || 100);
+
+        let baseTargetFps = Math.min(14, Math.round(originalFps));
+        if (frameCount > 120) baseTargetFps = Math.min(baseTargetFps, 10);
+        if (frameCount > 200) baseTargetFps = Math.min(baseTargetFps, 8);
+        if (frameCount > 300) baseTargetFps = Math.min(baseTargetFps, 6);
+
+        let quality = 30; // gif.js: higher number => more compression (skips more pixels)
+        let maxEncodeWidth = 320;
+
+        switch (this.qualityPreset) {
+            case 'high':
+                quality = 20; // less skipping → better quality, bigger file
+                maxEncodeWidth = 380;
+                baseTargetFps = Math.min(16, Math.max(10, baseTargetFps + 2));
+                break;
+            case 'economy':
+                quality = 40; // more skipping → smaller file
+                maxEncodeWidth = frameCount > 150 ? 260 : 280;
+                baseTargetFps = Math.max(6, baseTargetFps - 2);
+                break;
+            default: // balanced
+                // leave defaults, slight tweak if huge
+                if (frameCount > 200) quality = 35;
+        }
+
+        return { targetFps: baseTargetFps, quality, maxEncodeWidth, originalFps, frameCount, preset: this.qualityPreset };
+    }
+
+    // Down-sample frames to approximate target FPS, preserving total duration
+    optimizeEncodingFrames(frames, targetFps) {
+        if (!frames || frames.length === 0) return [];
+        const totalDuration = frames.reduce((a, f) => a + (f.delay || 100), 0);
+        targetFps = targetFps || 10;
+        const interval = 1000 / targetFps;
+        const optimized = [];
+        let elapsed = 0;
+        let nextSampleAt = 0;
+        let idx = 0;
+        while (nextSampleAt < totalDuration && idx < frames.length) {
+            let frame = frames[idx];
+            let frameDuration = frame.delay || 100;
+            if (elapsed + frameDuration < nextSampleAt && idx < frames.length - 1) {
+                elapsed += frameDuration;
+                idx++;
+                continue;
+            }
+            optimized.push({ canvas: frame.canvas || frame.image || frame, delay: Math.round(interval) });
+            nextSampleAt += interval;
+        }
+        if (optimized.length < 2 && frames.length >= 2) {
+            return [frames[0], frames[Math.floor(frames.length / 2)]];
+        }
+        return optimized;
+    }
+
+    async loadGifFrames(gifUrl) {
+        try {
+            console.log('Loading GIF frames from:', gifUrl);
+            // If a progress element exists in the DOM, update it (best-effort)
+            const _p = document.getElementById('progressText');
+            if (_p) _p.textContent = 'Extracting GIF frames...';
+            console.log('gifuct presence check:', {
+                gifuctNS: !!window.gifuct,
+                parseGIF: typeof (window.gifuct && window.gifuct.parseGIF) || typeof window.parseGIF,
+                decompressFrames: typeof (window.gifuct && window.gifuct.decompressFrames) || typeof window.decompressFrames
+            });
+            
+            // Load the GIF and extract frames
+            const response = await fetch(gifUrl);
+            const arrayBuffer = await response.arrayBuffer();
+            
+            // Decode all frames (gifuct-js) or fallback
+            await this.extractGifFrames(arrayBuffer, gifUrl);
+            
+        } catch (error) {
+            console.error('Error loading GIF frames:', error);
+            // Fallback to single frame
+            await this.loadSingleFrameNetwork(gifUrl);
+        }
+    }
+    
+    // Load a single frame using a network URL (may taint canvas on some CDNs)
+    async loadSingleFrameNetwork(gifUrl) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        
+        return new Promise((resolve, reject) => {
+            img.onload = () => {
+                // Limit canvas size for performance
+                const maxSize = 400;
+                const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+                
+                this.canvas.width = Math.floor(img.width * scale);
+                this.canvas.height = Math.floor(img.height * scale);
+                
+                // Cache base image into an offscreen canvas to avoid re-decoding
+                this.baseCanvas = document.createElement('canvas');
+                this.baseCanvas.width = this.canvas.width;
+                this.baseCanvas.height = this.canvas.height;
+                const bctx = this.baseCanvas.getContext('2d', { willReadFrequently: true });
+                bctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw to visible canvas initially
+                this.ctx.drawImage(this.baseCanvas, 0, 0);
+                
+                // Store as single frame (offscreen canvas)
+                this.gifFrames = [this.baseCanvas];
+                this.originalGifUrl = gifUrl;
+                this.frameDelay = 100; // Default delay
+                this.currentFrame = 0;
+                
+                this.startAnimation();
+                resolve();
+            };
+            
+            img.onerror = () => {
+                reject(new Error('Failed to load GIF'));
+            };
+            
+            img.src = gifUrl;
+        });
+    }
+    
+    async extractGifFrames(arrayBuffer, gifUrl) {
+        // Target output size used in editor
+        let outW, outH;
+        const trySetCanvasSize = (w, h) => {
+            const maxSize = 400;
+            const scale = Math.min(maxSize / w, maxSize / h, 1);
+            outW = Math.floor(w * scale);
+            outH = Math.floor(h * scale);
+            this.canvas.width = outW;
+            this.canvas.height = outH;
+        };
+
+        // 1) Try gifuct-js if available
+        try {
+            const gifuctNS = window.gifuct || window;
+            const parseGIF = gifuctNS.parseGIF || window.parseGIF;
+            const decompressFrames = gifuctNS.decompressFrames || window.decompressFrames;
+            if (parseGIF && decompressFrames) {
+                const gif = parseGIF(arrayBuffer);
+                const frames = decompressFrames(gif, true);
+                if (frames && frames.length) {
+                    const w = gif.lsd.width;
+                    const h = gif.lsd.height;
+                    trySetCanvasSize(w, h);
+
+                    const playCanvas = document.createElement('canvas');
+                    playCanvas.width = outW;
+                    playCanvas.height = outH;
+                    const playCtx = playCanvas.getContext('2d', { willReadFrequently: true });
+
+                    const accumCanvas = document.createElement('canvas');
+                    accumCanvas.width = w;
+                    accumCanvas.height = h;
+                    const accumCtx = accumCanvas.getContext('2d', { willReadFrequently: true });
+                    accumCtx.clearRect(0, 0, w, h);
+
+                    const frameCanvas = document.createElement('canvas');
+                    frameCanvas.width = w;
+                    frameCanvas.height = h;
+                    const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
+
+                    const assembledFrames = [];
+                    for (const f of frames) {
+                        if (f.disposalType === 2) {
+                            accumCtx.clearRect(0, 0, w, h);
+                        }
+                        const imgData = new ImageData(new Uint8ClampedArray(f.patch), f.dims.width, f.dims.height);
+                        frameCtx.clearRect(0, 0, w, h);
+                        frameCtx.putImageData(imgData, f.dims.left, f.dims.top);
+                        accumCtx.drawImage(frameCanvas, 0, 0);
+
+                        playCtx.clearRect(0, 0, outW, outH);
+                        playCtx.drawImage(accumCanvas, 0, 0, outW, outH);
+
+                        const snap = document.createElement('canvas');
+                        snap.width = outW;
+                        snap.height = outH;
+                        const sctx = snap.getContext('2d', { willReadFrequently: true });
+                        sctx.drawImage(playCanvas, 0, 0);
+                        assembledFrames.push({ canvas: snap, delay: Math.max(20, (f.delay || 10) * 10) });
+                    }
+
+                    this.gifFrames = assembledFrames;
+                    this.currentFrame = 0;
+                    this.frameDelay = assembledFrames[0]?.delay || 100;
+                    this.originalGifUrl = gifUrl;
+
+                    this.baseCanvas = document.createElement('canvas');
+                    this.baseCanvas.width = outW;
+                    this.baseCanvas.height = outH;
+                    const bctx = this.baseCanvas.getContext('2d', { willReadFrequently: true });
+                    bctx.drawImage(assembledFrames[0].canvas, 0, 0, outW, outH);
+
+                    this.startAnimation();
+                    return;
+                }
+            }
+            console.warn('gifuct-js not available or returned no frames; trying omggif fallback');
+        } catch (e) {
+            console.warn('gifuct-js decode failed, trying omggif fallback:', e);
+        }
+
+        // 2) Try omggif (GifReader) fallback for full frames
+        try {
+            const GifReader = window.GifReader || (window.OMGGIF && window.OMGGIF.GifReader);
+            if (GifReader) {
+                const u8 = new Uint8Array(arrayBuffer);
+                const reader = new GifReader(u8);
+                const w = reader.width;
+                const h = reader.height;
+                trySetCanvasSize(w, h);
+
+                const rgba = new Uint8ClampedArray(w * h * 4);
+                const snapCanvas = document.createElement('canvas');
+                const snapCtx = snapCanvas.getContext('2d', { willReadFrequently: true });
+                const assembledFrames = [];
+
+                for (let i = 0; i < reader.numFrames(); i++) {
+                    reader.decodeAndBlitFrameRGBA(i, rgba);
+                    // put into a source canvas of original size
+                    const src = document.createElement('canvas');
+                    src.width = w; src.height = h;
+                    const sctx = src.getContext('2d', { willReadFrequently: true });
+                    const id = new ImageData(rgba, w, h);
+                    sctx.putImageData(id, 0, 0);
+
+                    // scale into output size
+                    snapCanvas.width = outW; snapCanvas.height = outH;
+                    snapCtx.clearRect(0, 0, outW, outH);
+                    snapCtx.drawImage(src, 0, 0, outW, outH);
+
+                    const frameCanvas = document.createElement('canvas');
+                    frameCanvas.width = outW; frameCanvas.height = outH;
+                    const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
+                    fctx.drawImage(snapCanvas, 0, 0);
+
+                    const info = reader.frameInfo ? reader.frameInfo(i) : { delay: 10 };
+                    const delayMs = Math.max(20, (info.delay || 10) * 10);
+                    assembledFrames.push({ canvas: frameCanvas, delay: delayMs });
+                }
+
+                this.gifFrames = assembledFrames;
+                this.currentFrame = 0;
+                this.frameDelay = assembledFrames[0]?.delay || 100;
+                this.originalGifUrl = gifUrl;
+
+                this.baseCanvas = document.createElement('canvas');
+                this.baseCanvas.width = outW;
+                this.baseCanvas.height = outH;
+                const bctx2 = this.baseCanvas.getContext('2d', { willReadFrequently: true });
+                bctx2.drawImage(assembledFrames[0].canvas, 0, 0, outW, outH);
+
+                this.startAnimation();
+                return;
+            }
+            console.warn('omggif not available; falling back to single frame');
+        } catch (e2) {
+            console.warn('omggif decode failed; falling back to single frame:', e2);
+        }
+
+        // 3) Last resort: single frame
+        await this.loadSingleFrameNetwork(gifUrl);
+    }
+
+    // Load a single frame from a same-origin Blob/ObjectURL; safe for canvas readback
+    async loadSingleFrameFromObjectUrl(objectUrl, originalUrl) {
+        const img = new Image();
+        // crossOrigin not required for blob URLs, but harmless
+        img.crossOrigin = 'anonymous';
+        
+        return new Promise((resolve, reject) => {
+            img.onload = () => {
+                const maxSize = 400;
+                const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+                
+                this.canvas.width = Math.floor(img.width * scale);
+                this.canvas.height = Math.floor(img.height * scale);
+                
+                // Cache into offscreen base canvas
+                this.baseCanvas = document.createElement('canvas');
+                this.baseCanvas.width = this.canvas.width;
+                this.baseCanvas.height = this.canvas.height;
+                const bctx = this.baseCanvas.getContext('2d', { willReadFrequently: true });
+                bctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw to visible canvas
+                this.ctx.drawImage(this.baseCanvas, 0, 0);
+                
+                // Use baseCanvas as the single frame
+                this.gifFrames = [this.baseCanvas];
+                this.originalGifUrl = originalUrl;
+                this.frameDelay = 100;
+                this.currentFrame = 0;
+                
+                this.startAnimation();
+                resolve();
+            };
+            img.onerror = () => reject(new Error('Failed to load GIF from blob URL'));
+            img.src = objectUrl;
+        });
+    }
+
+    startAnimation() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+        }
+
+        let lastTs = performance.now();
+        let carry = 0;
+
+        const animate = (ts) => {
+            if (!ts) ts = performance.now();
+            const dt = ts - lastTs;
+            lastTs = ts;
+
+            if (this.isPlaying && this.gifFrames.length > 0) {
+                carry += dt;
+                const f = this.gifFrames[this.currentFrame % this.gifFrames.length];
+                const delay = Math.max(20, f.delay || this.frameDelay || 100);
+                if (carry >= delay) {
+                    carry = carry % delay;
+                    this.currentFrame = (this.currentFrame + 1) % this.gifFrames.length;
+                }
+                this.drawCurrentFrame();
+            }
+            this.animationId = requestAnimationFrame(animate);
+        };
+
+        this.animationId = requestAnimationFrame(animate);
+    }
+
+    drawCurrentFrame() {
+        if (!this.gifFrames.length) return;
+
+        const f = this.gifFrames[this.currentFrame % this.gifFrames.length];
+        const img = (f && (f.canvas || f.image)) ? (f.canvas || f.image) : f;
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        if (img && (img instanceof HTMLCanvasElement || img instanceof HTMLImageElement)) {
+            this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+        } else {
+            // Skip drawing if frame is not drawable yet
+            return;
+        }
+        
+        // Draw static text overlays on top of the original frame
+        this.textOverlays.forEach(overlay => {
+            this.drawText(overlay);
+        });
+    }
+
+    drawText(overlay) {
+        this.ctx.save();
+        
+        const fontSize = overlay.fontSize || 24;
+        const fontFamily = overlay.fontFamily || 'Impact, Arial, sans-serif';
+        const bold = overlay.bold ? 'bold ' : '';
+        
+        this.ctx.font = `${bold}${fontSize}px ${fontFamily}`;
+        this.ctx.fillStyle = overlay.color || '#ffffff';
+        this.ctx.strokeStyle = overlay.strokeColor || '#000000';
+        this.ctx.lineWidth = overlay.strokeWidth || 2;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        
+        // Draw stroke (outline)
+        if (overlay.strokeWidth > 0) {
+            this.ctx.strokeText(overlay.text, overlay.x, overlay.y);
+        }
+        
+        // Draw fill
+        this.ctx.fillText(overlay.text, overlay.x, overlay.y);
+        
+        this.ctx.restore();
+    }
+
+    addTextOverlay() {
+        const textInput = document.getElementById('textInput');
+        const text = textInput.value.trim();
+        
+        if (!text) {
+            this.showMessage('Please enter some text', 'error');
+            return;
+        }
+
+        if (!this.selectedGif) {
+            this.showMessage('Please select a GIF first', 'error');
+            return;
+        }
+
+        const overlay = {
+            id: Date.now(),
+            text: text,
+            x: this.canvas.width / 2,
+            y: this.canvas.height / 2,
+            fontSize: parseInt(document.getElementById('fontSize').value),
+            color: document.getElementById('textColor').value,
+            fontFamily: document.getElementById('fontFamily').value,
+            bold: document.getElementById('boldText').checked,
+            strokeWidth: parseInt(document.getElementById('strokeWidth').value),
+            strokeColor: document.getElementById('strokeColor').value
+        };
+
+        this.textOverlays.push(overlay);
+        this.createTextOverlayElement(overlay);
+        textInput.value = '';
+        
+        this.showMessage('Text added! Drag it to reposition.', 'success');
+    }
+
+    createTextOverlayElement(overlay) {
+        const overlayElement = document.createElement('div');
+        overlayElement.className = 'text-overlay';
+        overlayElement.setAttribute('data-id', overlay.id);
+
+    // Measure text on canvas to size the invisible handle around text bounds
+        const measureCtx = this.ctx;
+        const bold = overlay.bold ? 'bold ' : '';
+        measureCtx.save();
+        measureCtx.font = `${bold}${overlay.fontSize}px ${overlay.fontFamily}`;
+        const metrics = measureCtx.measureText(overlay.text);
+        // rough box: width with padding, height approximated by fontSize
+        const pad = Math.max(6, Math.round(overlay.fontSize * 0.2));
+        const boxW = Math.ceil(metrics.width) + pad * 2;
+        const boxH = Math.ceil(overlay.fontSize * 1.25) + pad * 2;
+        measureCtx.restore();
+
+    // Position box centered at overlay.x/y within the canvas rect (canvas text uses center alignment)
+    const crect = this.getCanvasRectRelative();
+    overlayElement.style.position = 'absolute';
+    overlayElement.style.width = `${boxW}px`;
+    overlayElement.style.height = `${boxH}px`;
+    overlayElement.style.left = `${crect.left + (overlay.x - boxW / 2)}px`;
+    overlayElement.style.top = `${crect.top + (overlay.y - boxH / 2)}px`;
+
+        // Make draggable
+        this.makeDraggable(overlayElement, overlay, boxW, boxH);
+
+        document.getElementById('textOverlays').appendChild(overlayElement);
+    }
+
+    makeDraggable(element, overlay, boxW = 0, boxH = 0) {
+        let isDragging = false;
+        let startX, startY, startLeftPx, startTopPx;
+        const overlayRoot = document.getElementById('textOverlays');
+
+        element.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            element.classList.add('selected');
+            // Starting pointer position in viewport
+            startX = e.clientX;
+            startY = e.clientY;
+            // Current element pixel position (left/top)
+            startLeftPx = parseFloat(element.style.left) || 0;
+            startTopPx = parseFloat(element.style.top) || 0;
+            e.preventDefault();
+        });
+
+        const onMove = (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+
+            // New element box top-left in pixels
+            let newLeft = startLeftPx + dx;
+            let newTop = startTopPx + dy;
+
+            const halfW = (boxW || element.offsetWidth) / 2;
+            const halfH = (boxH || element.offsetHeight) / 2;
+            // Clamp to canvas bounds within overlay root
+            const crect = this.getCanvasRectRelative();
+            const minLeft = crect.left;
+            const minTop = crect.top;
+            const maxLeft = crect.left + crect.width - (halfW * 2);
+            const maxTop = crect.top + crect.height - (halfH * 2);
+            newLeft = Math.max(minLeft, Math.min(maxLeft, newLeft));
+            newTop = Math.max(minTop, Math.min(maxTop, newTop));
+
+            // Update element position
+            element.style.left = newLeft + 'px';
+            element.style.top = newTop + 'px';
+
+            // Update center-based overlay coordinates used for drawing
+            overlay.x = (newLeft - crect.left) + halfW;
+            overlay.y = (newTop - crect.top) + halfH;
+        };
+
+        const onUp = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            element.classList.remove('selected');
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+
+        // Double-click to remove
+        element.addEventListener('dblclick', () => {
+            this.removeTextOverlay(overlay.id);
+        });
+    }
+
+    removeTextOverlay(id) {
+        this.textOverlays = this.textOverlays.filter(overlay => overlay.id !== id);
+        const element = document.querySelector(`[data-id="${id}"]`);
+        if (element) {
+            element.remove();
+        }
+    }
+
+    clearAllText() {
+        this.textOverlays = [];
+        document.getElementById('textOverlays').innerHTML = '';
+        this.showMessage('All text cleared', 'success');
+    }
+
+    togglePlayback() {
+        this.isPlaying = !this.isPlaying;
+        const btn = document.getElementById('playPauseBtn');
+        btn.textContent = this.isPlaying ? '⏸️ Pause' : '▶️ Play';
+    }
+
+    previousFrame() {
+        if (this.gifFrames.length > 1) {
+            this.currentFrame = (this.currentFrame - 1 + this.gifFrames.length) % this.gifFrames.length;
+            this.drawCurrentFrame();
+        }
+    }
+
+    nextFrame() {
+        if (this.gifFrames.length > 1) {
+            this.currentFrame = (this.currentFrame + 1) % this.gifFrames.length;
+            this.drawCurrentFrame();
+        }
+    }
+
+    async generateQuickGif() {
+        if (!this.selectedGif) {
+            this.showMessage('Please select a GIF first', 'error');
+            return;
+        }
+
+        if (this.textOverlays.length === 0) {
+            this.showMessage('Please add some text first', 'error');
+            return;
+        }
+
+    const dl = document.getElementById('downloadSection');
+    dl.style.display = 'block';
+    requestAnimationFrame(() => dl.classList.add('active'));
+    dl.scrollIntoView({ behavior: 'smooth' });
+
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const quickBtn = document.getElementById('quickGifBtn');
+
+        // Disable button during processing
+        quickBtn.disabled = true;
+        quickBtn.textContent = 'Generating...';
+
+        try {
+            // Reset progress
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Quick generation mode - creating static image...';
+
+            await this.generateStaticImage(progressFill, progressText);
+            this.showMessage('Quick image created successfully! 🚀', 'success');
+        } catch (error) {
+            console.error('Error in quick generation:', error);
+            this.showMessage('Error creating quick image. Please try again.', 'error');
+            document.getElementById('downloadSection').style.display = 'none';
+        } finally {
+            // Re-enable button
+            quickBtn.disabled = false;
+            quickBtn.textContent = 'Quick Static Image';
+        }
+    }
+
+    async generateGif() {
+        if (!this.selectedGif) {
+            this.showMessage('Please select a GIF first', 'error');
+            return;
+        }
+
+        if (this.textOverlays.length === 0) {
+            this.showMessage('Please add some text first', 'error');
+            return;
+        }
+
+    const dl = document.getElementById('downloadSection');
+    dl.style.display = 'block';
+    requestAnimationFrame(() => dl.classList.add('active'));
+    dl.scrollIntoView({ behavior: 'smooth' });
+
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const generateBtn = document.getElementById('generateGifBtn');
+
+        // Disable generate button during processing
+        generateBtn.disabled = true;
+        generateBtn.textContent = 'Creating GIF...';
+
+        try {
+            // Pause any ongoing canvas animation to reduce contention
+            const wasPlaying = this.isPlaying;
+            this.isPlaying = false;
+            if (this.animationId) {
+                cancelAnimationFrame(this.animationId);
+                this.animationId = null;
+            }
+
+            // Reset progress
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Starting animated GIF creation...';
+
+            // Try to create actual animated GIF
+            console.log('Attempting to create REAL animated GIF...');
+            await this.generateWithGifJs(progressFill, progressText);
+            this.showMessage('Animated GIF created successfully! 🎉🎬', 'success');
+            
+        } catch (error) {
+            console.error('GIF generation failed:', error);
+            this.showMessage('GIF generation failed. Creating high-quality static image instead...', 'error');
+            // Fallback to static image
+            try {
+                progressText.textContent = 'Creating static meme image...';
+                progressFill.style.width = '0%';
+                await this.generateStaticImage(progressFill, progressText);
+                this.showMessage('Static meme image created! (Try "Quick Meme" for guaranteed results)', 'success');
+            } catch (fallbackError) {
+                console.error('Fallback also failed:', fallbackError);
+                this.showMessage('Error creating image. Please try again.', 'error');
+                document.getElementById('downloadSection').style.display = 'none';
+            }
+        } finally {
+            // Resume animation playback if it was running before
+            if (this.isPlaying === false) {
+                this.isPlaying = true;
+                this.startAnimation();
+            }
+            // Re-enable generate button
+            generateBtn.disabled = false;
+            generateBtn.textContent = 'Create Animated GIF';
+        }
+    }
+
+    async generateCompatGif() {
+        if (!this.selectedGif) { this.showMessage('Select a GIF first', 'error'); return; }
+        if (this.textOverlays.length === 0) { this.showMessage('Add some text first', 'error'); return; }
+        const btn = document.getElementById('compatGifBtn');
+        const dl = document.getElementById('downloadSection');
+        dl.style.display = 'block'; requestAnimationFrame(()=>dl.classList.add('active'));
+        dl.scrollIntoView({ behavior: 'smooth' });
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        btn.disabled = true; const oldLabel = btn.textContent; btn.textContent = 'Encoding...';
+        try {
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Messenger mode: preparing frames...';
+            // Build conservative frame list (sample)
+            let targetDelay = 90; // a bit slower reduces size
+            let maxDim = 300;     // constrain both width & height
+            let frames = this.gifFrames.slice();
+            // basic FPS cap ~1000/targetDelay
+            const roughFps = 1000/targetDelay;
+            if (this.optimizeEncodingFrames) frames = this.optimizeEncodingFrames(frames, roughFps);
+            // Hard cap frame count to avoid huge files
+            const maxFrames = 48;
+            if (frames.length > maxFrames) frames = frames.slice(0, maxFrames);
+            // Prepare encoder with robust worker fallback chain
+            let gif;
+            const makeEncoder = (opts)=> new GIF(Object.assign({
+                repeat:0,
+                background:'#000000',
+                transparent:null
+            }, opts));
+            const workerUrl = this.getWorkerScriptUrl();
+            let workerTried = false;
+            if (workerUrl) {
+                try {
+                    workerTried = true;
+                    gif = makeEncoder({ workers:2, workerScript:workerUrl, quality:26, dither:false });
+                } catch(e) {
+                    console.warn('Primary worker failed, attempt blob fallback', e);
+                }
+            }
+            if (!gif) {
+                // Try inline blob fallback by fetching or reusing global cached blob
+                try {
+                    if (!window.__inlineGifWorkerBlobUrl) {
+                        const resp = await fetch(workerUrl).catch(()=>null);
+                        if (resp && resp.ok) {
+                            const code = await resp.text();
+                            const blobUrl = URL.createObjectURL(new Blob([code], { type:'application/javascript'}));
+                            window.__inlineGifWorkerBlobUrl = blobUrl;
+                        }
+                    }
+                    if (window.__inlineGifWorkerBlobUrl) {
+                        gif = makeEncoder({ workers:2, workerScript:window.__inlineGifWorkerBlobUrl, quality:26, dither:false });
+                    }
+                } catch (e2) {
+                    console.warn('Blob worker fallback failed', e2);
+                }
+            }
+            if (!gif) {
+                console.warn('Falling back to no-worker mode for compat GIF');
+                gif = makeEncoder({ workers:0, quality:28, dither:false });
+            }
+            // Encoding canvas (scaled)
+            const srcW = this.canvas.width, srcH = this.canvas.height;
+            const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
+            const encW = Math.max(1, Math.round(srcW * scale));
+            const encH = Math.max(1, Math.round(srcH * scale));
+            const encCanvas = document.createElement('canvas');
+            encCanvas.width = encW; encCanvas.height = encH;
+            const encCtx = encCanvas.getContext('2d', { willReadFrequently:true });
+            for (let i=0;i<frames.length;i++) {
+                const f = frames[i];
+                const img = (f.canvas||f.image)||f;
+                this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
+                // Pre-fill to remove any transparency
+                this.ctx.fillStyle = '#000000';
+                this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+                this.ctx.drawImage(img,0,0,this.canvas.width,this.canvas.height);
+                this.textOverlays.forEach(o=>this.drawText(o));
+                encCtx.clearRect(0,0,encW,encH);
+                encCtx.fillStyle = '#000000';
+                encCtx.fillRect(0,0,encW,encH);
+                encCtx.drawImage(this.canvas,0,0,encW,encH);
+                gif.addFrame(encCanvas,{ delay: targetDelay, copy:true, dispose:2 });
+                const pct = Math.round(((i+1)/frames.length)*60);
+                progressFill.style.width = pct+'%';
+                progressText.textContent = `Adding frame ${i+1}/${frames.length}`;
+                await new Promise(r=>setTimeout(r,0));
+            }
+            progressText.textContent = 'Rendering optimized GIF...';
+            gif.on('progress', p => {
+                const base = 60 + Math.round(p*30);
+                progressFill.style.width = base+'%';
+                progressText.textContent = `Rendering... ${base}%`;
+            });
+            const encodeOnce = () => new Promise((resolve,reject)=>{
+                gif.on('finished', b=>resolve(b));
+                gif.on('abort', ()=>reject(new Error('Aborted')));
+                gif.on('error', e=>reject(e));
+                gif.render();
+            });
+
+            let blob = await encodeOnce();
+            progressFill.style.width = '95%';
+            progressText.textContent = 'Validating...';
+            let meta = await this.validateGif(blob);
+            console.log('Compat GIF validation', meta, 'size', blob.size);
+
+            const targetBytes = 1800000; // ~1.8MB tighter for Messenger
+            let attempt = 1;
+            // Adaptive retries if too large
+            while (blob.size > targetBytes && attempt <= 2) {
+                this.showMessage(`Optimizing for Messenger (pass ${attempt+1})...`, 'info');
+                // Tweak settings: shrink width and increase quality number (more compression), slower delay
+                maxDim = Math.round(maxDim * 0.8);
+                targetDelay = Math.min(140, targetDelay + 10);
+                const qBump = 6 * attempt;
+                const newQuality = 26 + qBump;
+
+                // Rebuild encoder
+                gif = makeEncoder({ workers:0, quality:newQuality, dither:false, repeat:0, background:'#000000', transparent:null });
+                const newScale = Math.min(1, maxDim / Math.max(srcW, srcH));
+                const nW = Math.max(1, Math.round(srcW * newScale));
+                const nH = Math.max(1, Math.round(srcH * newScale));
+                encCanvas.width = nW; encCanvas.height = nH;
+
+                // Subsample frames to reduce count on retries
+                const step = (attempt + 1);
+                const totalOut = Math.ceil(frames.length / step);
+                for (let i=0;i<totalOut;i++) {
+                    const idx = i * step;
+                    if (idx >= frames.length) break;
+                    const f = frames[idx]; const img=(f.canvas||f.image)||f;
+                    this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
+                    this.ctx.fillStyle = '#000000';
+                    this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+                    this.ctx.drawImage(img,0,0,this.canvas.width,this.canvas.height);
+                    this.textOverlays.forEach(o=>this.drawText(o));
+                    encCtx.clearRect(0,0,nW,nH);
+                    encCtx.fillStyle = '#000000';
+                    encCtx.fillRect(0,0,nW,nH);
+                    encCtx.drawImage(this.canvas,0,0,nW,nH);
+                    gif.addFrame(encCanvas,{ delay: targetDelay, copy:true, dispose:2 });
+                    const pctBase = 65;
+                    const pct = pctBase + Math.round(((i+1)/totalOut)*20);
+                    progressFill.style.width = Math.min(90, pct)+'%';
+                    progressText.textContent = `Re-encoding (${attempt+1}) ${i+1}/${totalOut}`;
+                    await new Promise(r=>setTimeout(r,0));
+                }
+                blob = await new Promise((resolve,reject)=>{
+                    gif.on('finished', b=>resolve(b));
+                    gif.on('abort', ()=>reject(new Error('Aborted')));
+                    gif.on('error', e=>reject(e));
+                    gif.render();
+                });
+                meta = await this.validateGif(blob);
+                console.log('Retry result', attempt+1, 'size', blob.size, meta);
+                attempt++;
+            }
+
+            this.setupDownload(blob,'gif');
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Messenger compatible GIF ready';
+        } catch (e) {
+            console.error('Compat generation failed', e);
+            this.showMessage('Compat GIF failed','error');
+        } finally {
+            btn.disabled = false; btn.textContent = oldLabel;
+        }
+    }
+
+    async reencodeSimple(originalBlob, frames, delay, encW, encH, progressFill, progressText) {
+        return new Promise(async (resolve,reject)=>{
+            try {
+                let gif2 = new GIF({ workers:1, quality:22, repeat:0, background:'#000000' });
+                const encCanvas = document.createElement('canvas'); encCanvas.width=encW; encCanvas.height=encH;
+                const encCtx = encCanvas.getContext('2d',{ willReadFrequently:true });
+                for (let i=0;i<frames.length;i++) {
+                    const f=frames[i]; const img=(f.canvas||f.image)||f;
+                    this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
+                    this.ctx.drawImage(img,0,0,this.canvas.width,this.canvas.height);
+                    this.textOverlays.forEach(o=>this.drawText(o));
+                    encCtx.clearRect(0,0,encW,encH);
+                    encCtx.drawImage(this.canvas,0,0,encW,encH);
+                    gif2.addFrame(encCanvas,{ delay, copy:true });
+                }
+                gif2.on('finished', b=>resolve(b));
+                gif2.on('abort', ()=>reject(new Error('Fallback abort')));
+                gif2.render();
+            } catch(err){ reject(err); }
+        });
+    }
+
+    async generateWithGifJs(progressFill, progressText) {
+        return new Promise(async (resolve, reject) => {
+            console.log('Starting REAL animated GIF generation...');
+            
+            try {
+                const settings = this.getEncodingSettings ? this.getEncodingSettings() : { quality: 30, targetFps: 12, maxEncodeWidth: 320 };
+                console.log('Using encoding settings:', settings);
+                let gif;
+                const make = (opts)=> new GIF(Object.assign({ repeat:0, debug:false, dither:false, background:'#000000', transparent:null }, opts));
+                const workerUrl = this.getWorkerScriptUrl();
+                if (workerUrl) {
+                    try {
+                        gif = make({ workers: Math.max(2, navigator.hardwareConcurrency ? Math.min(4, navigator.hardwareConcurrency) : 2), workerScript: workerUrl, quality: settings.quality });
+                    } catch(e) {
+                        console.warn('Primary worker failed, trying blob fallback', e);
+                    }
+                }
+                if (!gif) {
+                    // Attempt async inline fetch via promise chain
+                    // (generateWithGifJs runs in synchronous executor; we dynamically create a promise)
+                    // We'll block subsequent logic by constructing a temporary promise.
+                    try {
+                        gif = await (async ()=>{
+                            if (!window.__inlineGifWorkerBlobUrl && workerUrl) {
+                                try {
+                                    const resp = await fetch(workerUrl).catch(()=>null);
+                                    if (resp && resp.ok) {
+                                        const code = await resp.text();
+                                        window.__inlineGifWorkerBlobUrl = URL.createObjectURL(new Blob([code], { type:'application/javascript'}));
+                                    }
+                                } catch(err) { console.warn('Inline worker fetch failed', err); }
+                            }
+                            if (window.__inlineGifWorkerBlobUrl) {
+                                return make({ workers:2, workerScript:window.__inlineGifWorkerBlobUrl, quality: settings.quality });
+                            }
+                            return null;
+                        })();
+                    } catch(e2) { console.warn('Blob worker fallback failed', e2); }
+                }
+                if (!gif) {
+                    console.warn('Falling back to no-worker mode');
+                    gif = make({ workers:0, quality: Math.min(50, (settings.quality || 30) + 5) });
+                }
+
+                let completed = false;
+                let timeoutId = null;
+
+                // Progress tracking
+                gif.on('progress', (p) => {
+                    if (completed) return;
+                    const percent = Math.round(p * 50 + 50);
+                    progressFill.style.width = percent + '%';
+                    progressText.textContent = `Encoding GIF... ${percent}%`;
+                    console.log(`GIF progress: ${percent}%`);
+                });
+
+                gif.on('finished', (blob) => {
+                    if (completed) return;
+                    completed = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    
+                    console.log('GIF completed! Size:', blob.size, 'bytes');
+                    progressText.textContent = 'Animated GIF created successfully!';
+                    progressFill.style.width = '100%';
+                    this.setupDownload(blob, 'gif');
+                    resolve();
+                });
+
+                gif.on('abort', () => {
+                    if (!completed) {
+                        completed = true;
+                        if (timeoutId) clearTimeout(timeoutId);
+                        reject(new Error('GIF generation aborted'));
+                    }
+                });
+
+                // Timeout after 90 seconds
+                timeoutId = setTimeout(() => {
+                    if (!completed) {
+                        completed = true;
+                        console.log('GIF generation timeout');
+                        gif.abort();
+                        reject(new Error('GIF generation timeout'));
+                    }
+                }, 90000);
+
+                // Create frames and render (pass settings)
+                this.addGifFrames(gif, progressFill, progressText, settings).then(() => {
+                    if (completed) return;
+                    
+                    console.log('Starting GIF render...');
+                    progressText.textContent = 'Rendering animated GIF...';
+                    progressFill.style.width = '50%';
+                    
+                    gif.render();
+                }).catch(error => {
+                    if (!completed) {
+                        completed = true;
+                        if (timeoutId) clearTimeout(timeoutId);
+                        reject(error);
+                    }
+                });
+
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    async addGifFrames(gif, progressFill, progressText, settings = { maxEncodeWidth: 320, targetFps: 12 }) {
+        if (!this.gifFrames || this.gifFrames.length === 0) {
+            throw new Error('No frames available for encoding');
+        }
+
+        // Frame sampling to reduce file size
+        let frames = this.gifFrames;
+        if (this.optimizeEncodingFrames) {
+            frames = this.optimizeEncodingFrames(frames, settings.targetFps);
+        }
+        console.log(`Encoding ${frames.length} frames (original ${this.gifFrames.length})`);
+
+        // Prepare a smaller encoding canvas to speed up quantization
+        const maxEncodeSize = settings.maxEncodeWidth || 320; // px (width)
+        const srcW = this.canvas.width;
+        const srcH = this.canvas.height;
+        const scale = Math.min(1, maxEncodeSize / srcW);
+        const encW = Math.max(1, Math.round(srcW * scale));
+        const encH = Math.max(1, Math.round(srcH * scale));
+
+        if (!this._encCanvas) {
+            this._encCanvas = document.createElement('canvas');
+            this._encCtx = this._encCanvas.getContext('2d', { willReadFrequently: true });
+        }
+        this._encCanvas.width = encW;
+        this._encCanvas.height = encH;
+
+        const total = frames.length;
+        for (let i = 0; i < total; i++) {
+            const f = frames[i];
+            const img = (f && (f.canvas || f.image)) ? (f.canvas || f.image) : f;
+
+            // Draw original frame (scaled) to main canvas
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+
+            // Draw static text overlays
+            this.textOverlays.forEach(overlay => this.drawText(overlay));
+
+            // Downscale into encoding canvas
+            this._encCtx.clearRect(0, 0, encW, encH);
+            this._encCtx.drawImage(this.canvas, 0, 0, encW, encH);
+
+            gif.addFrame(this._encCanvas, {
+                delay: Math.max(20, f.delay || this.frameDelay || 100),
+                copy: true
+            });
+
+            const percent = Math.round(((i + 1) / total) * 50);
+            progressFill.style.width = percent + '%';
+            progressText.textContent = `Adding frame ${i + 1}/${total}...`;
+
+            // Yield to UI a bit
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        console.log(`All ${total} frames added with original timing`);
+    }
+
+    async createOptimizedMeme(progressFill, progressText) {
+        // Clear canvas and create the final high-quality meme
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Draw base GIF frame
+        if (this.gifFrames.length > 0) {
+            this.ctx.drawImage(
+                this.gifFrames[0], 
+                0, 0, 
+                this.canvas.width, 
+                this.canvas.height
+            );
+        }
+        
+        // Draw all text overlays
+        this.textOverlays.forEach(overlay => {
+            this.drawText(overlay);
+        });
+        
+        progressFill.style.width = '100%';
+        progressText.textContent = 'High-quality meme created!';
+        
+        return new Promise((resolve) => {
+            this.canvas.toBlob((blob) => {
+                this.setupDownload(blob, 'png');
+                resolve();
+            }, 'image/png', 0.98);
+        });
+    }
+
+    async addFramesToGif(gif, progressFill, progressText) {
+        // Drastically reduce frame count for faster generation
+        const canvasArea = this.canvas.width * this.canvas.height;
+        let frameCount;
+        
+        if (canvasArea > 300000) {
+            frameCount = 3; // Very large images get minimal frames
+        } else if (canvasArea > 150000) {
+            frameCount = 5; // Medium images get few frames
+        } else {
+            frameCount = 8; // Small images can have more frames
+        }
+        
+        console.log(`Generating ${frameCount} frames for ${this.canvas.width}x${this.canvas.height} image`);
+        
+        // Store original text positions
+        const originalPositions = this.textOverlays.map(overlay => ({ x: overlay.x, y: overlay.y }));
+        
+        // Create a temporary canvas for frame generation to avoid multiple reads from main canvas
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.canvas.width;
+        tempCanvas.height = this.canvas.height;
+        const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+        
+        for (let i = 0; i < frameCount; i++) {
+            console.log(`Preparing frame ${i + 1}/${frameCount}`);
+            
+            // Clear and redraw temporary canvas
+            tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+            
+            // Draw the GIF frame to temporary canvas
+            if (this.gifFrames.length > 0) {
+                tempCtx.drawImage(this.gifFrames[0], 0, 0);
+            }
+            
+            // Add subtle animation to text (very minimal for speed)
+            this.textOverlays.forEach((overlay, index) => {
+                const variation = Math.sin((i / frameCount) * Math.PI * 2) * 0.5; // Very small variation
+                overlay.animatedY = originalPositions[index].y + variation;
+            });
+            
+            // Draw text overlays to temporary canvas
+            this.textOverlays.forEach(overlay => {
+                this.drawTextToContext(tempCtx, overlay);
+            });
+            
+            // Add frame to GIF from temporary canvas with optimized settings
+            gif.addFrame(tempCtx, { 
+                delay: frameCount <= 3 ? 500 : 200, // Slower animation for fewer frames
+                copy: true,
+                dispose: 2 // Restore to background color
+            });
+            
+            // Update progress
+            const percent = Math.round((i + 1) / frameCount * 50);
+            progressFill.style.width = percent + '%';
+            progressText.textContent = `Prepared frame ${i + 1}/${frameCount}`;
+            
+            // Minimal delay
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        
+        console.log('All frames prepared successfully');
+        
+        // Restore original positions
+        this.textOverlays.forEach((overlay, index) => {
+            overlay.x = originalPositions[index].x;
+            overlay.y = originalPositions[index].y;
+            delete overlay.animatedY;
+        });
+        
+        // Update main canvas one final time
+        this.drawCurrentFrame();
+    }
+
+    drawTextToContext(ctx, overlay) {
+        ctx.save();
+        
+        const fontSize = overlay.fontSize || 24;
+        const fontFamily = overlay.fontFamily || 'Impact, Arial, sans-serif';
+        const bold = overlay.bold ? 'bold ' : '';
+        
+        ctx.font = `${bold}${fontSize}px ${fontFamily}`;
+        ctx.fillStyle = overlay.color || '#ffffff';
+        ctx.strokeStyle = overlay.strokeColor || '#000000';
+        ctx.lineWidth = overlay.strokeWidth || 2;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Use the animated Y position if available, otherwise use original
+        const yPos = overlay.animatedY !== undefined ? overlay.animatedY : overlay.y;
+        
+        // Draw stroke (outline) first
+        if (overlay.strokeWidth > 0) {
+            ctx.strokeText(overlay.text, overlay.x, yPos);
+        }
+        
+        // Draw fill text on top
+        ctx.fillText(overlay.text, overlay.x, yPos);
+        
+        ctx.restore();
+    }
+
+    drawAnimatedText(overlay, frameIndex, totalFrames) {
+        this.ctx.save();
+        
+        const fontSize = overlay.fontSize || 24;
+        const fontFamily = overlay.fontFamily || 'Impact, Arial, sans-serif';
+        const bold = overlay.bold ? 'bold ' : '';
+        
+        this.ctx.font = `${bold}${fontSize}px ${fontFamily}`;
+        this.ctx.fillStyle = overlay.color || '#ffffff';
+        this.ctx.strokeStyle = overlay.strokeColor || '#000000';
+        this.ctx.lineWidth = overlay.strokeWidth || 2;
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        
+        // Use the animated Y position if available, otherwise use original
+        const yPos = overlay.animatedY !== undefined ? overlay.animatedY : overlay.y;
+        
+        // Draw stroke (outline) first
+        if (overlay.strokeWidth > 0) {
+            this.ctx.strokeText(overlay.text, overlay.x, yPos);
+        }
+        
+        // Draw fill text on top
+        this.ctx.fillText(overlay.text, overlay.x, yPos);
+        
+        this.ctx.restore();
+    }
+
+    async generateStaticImage(progressFill, progressText) {
+        return new Promise((resolve, reject) => {
+            try {
+                progressText.textContent = 'Generating static image...';
+                progressFill.style.width = '25%';
+                
+                // Clear and redraw canvas with final content
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                progressFill.style.width = '50%';
+                
+                // Draw the first GIF frame (handle canvas/image containers)
+                if (this.gifFrames.length > 0) {
+                    const f0 = this.gifFrames[0];
+                    const base = (f0 && (f0.canvas || f0.image)) ? (f0.canvas || f0.image) : f0;
+                    this.ctx.drawImage(base, 0, 0, this.canvas.width, this.canvas.height);
+                }
+                
+                progressFill.style.width = '75%';
+                
+                // Draw all text overlays
+                this.textOverlays.forEach(overlay => {
+                    this.drawText(overlay);
+                });
+                
+                progressFill.style.width = '100%';
+                progressText.textContent = 'Image generated successfully!';
+                
+                // Convert canvas to blob
+                this.canvas.toBlob((blob) => {
+                    if (blob) {
+                        this.setupDownload(blob, 'png');
+                        resolve();
+                    } else {
+                        reject(new Error('Failed to create image blob'));
+                    }
+                }, 'image/png', 0.95);
+                
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+
+    setupDownload(blob, format = 'gif') {
+        const downloadBtn = document.getElementById('downloadBtn');
+        const url = URL.createObjectURL(blob);
+        
+        downloadBtn.style.display = 'block';
+        downloadBtn.textContent = `Download ${format.toUpperCase()}`;
+        downloadBtn.onclick = () => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `meme-${Date.now()}.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+    }
+
+    showMessage(message, type = 'info') {
+        // Create a simple toast notification
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        toast.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+            max-width: 300px;
+        `;
+
+        switch (type) {
+            case 'success':
+                toast.style.background = '#28a745';
+                break;
+            case 'error':
+                toast.style.background = '#dc3545';
+                break;
+            default:
+                toast.style.background = '#667eea';
+        }
+
+        document.body.appendChild(toast);
+
+        setTimeout(() => {
+            toast.style.animation = 'slideOut 0.3s ease';
+            setTimeout(() => {
+                if (document.body.contains(toast)) {
+                    document.body.removeChild(toast);
+                }
+            }, 300);
+        }, 3000);
+    }
+}
+
+// Add animation styles for toast notifications
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    
+    @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+`;
+document.head.appendChild(style);
+
+// Initialize the application when the page loads
+document.addEventListener('DOMContentLoaded', () => {
+    new GifMemeGenerator();
+});

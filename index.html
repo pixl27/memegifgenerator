@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GIF Meme Generator</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/gif-frames@1.0.1/index.min.js"></script>
+    <!-- Try CDNs for gifuct-js (frame decoder). If blocked, fall back to local vendor build (stub). -->
+    <script src="https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/lib/index.js"></script>
+    <script>window.gifuct = window.gifuct || (window.parseGIF && window.decompressFrames ? {parseGIF: window.parseGIF, decompressFrames: window.decompressFrames} : null);</script>
+    <script src="https://unpkg.com/gifuct-js@2.1.2/lib/index.js"></script>
+    <script>window.gifuct = window.gifuct || (window.parseGIF && window.decompressFrames ? {parseGIF: window.parseGIF, decompressFrames: window.decompressFrames} : null);</script>
+    <script src="vendor/gifuct.min.js"></script>
+    <!-- Fallback decoder: omggif (browser-ready) -->
+    <script src="https://cdn.jsdelivr.net/npm/omggif@1.0.10/omggif.min.js"></script>
+    <script type="module">
+    // Try to load gifuct-js via ESM CDN and expose as window.gifuct
+    (async () => {
+        if (!window.gifuct || !window.gifuct.parseGIF) {
+            try {
+                const mod = await import('https://esm.sh/gifuct-js@2.1.2');
+                if (mod && mod.parseGIF && mod.decompressFrames) {
+                    window.gifuct = { parseGIF: mod.parseGIF, decompressFrames: mod.decompressFrames };
+                    console.log('gifuct-js loaded via ESM CDN');
+                }
+            } catch (e) {
+                console.warn('Failed to load gifuct-js via ESM CDN:', e);
+            }
+        }
+    })();
+    </script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 GIF Meme Generator</h1>
+            <p>Search for GIFs and add your custom text!</p>
+        </header>
+
+        <main>
+            <!-- Search Section -->
+            <section class="search-section">
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="Search for GIFs..." />
+                    <button id="searchBtn">Search</button>
+                </div>
+                <div id="giphyKey" class="api-key-section">
+                    <input type="password" id="apiKeyInput" placeholder="Enter your Tenor API key" />
+                    <button id="saveKeyBtn">Save Key</button>
+                    <p class="info">Get your free API key from <a href="https://tenor.com/gifapi" target="_blank">Tenor GIF API</a></p>
+                </div>
+            </section>
+
+            <!-- GIF Results -->
+            <section class="results-section">
+                <div id="gifResults" class="gif-grid"></div>
+                <div id="pagination" class="pagination">
+                    <button id="prevPageBtn" disabled>◀ Prev</button>
+                    <span id="pageInfo">Page 1</span>
+                    <button id="nextPageBtn">Next ▶</button>
+                </div>
+            </section>
+
+            <!-- Editor Section -->
+            <section class="editor-section" id="editorSection" style="display: none;">
+                <div class="editor-container">
+                    <div class="canvas-container">
+                        <canvas id="gifCanvas"></canvas>
+                        <div id="textOverlays"></div>
+                    </div>
+                    
+                    <div class="controls">
+                        <h3>Text Controls</h3>
+                        
+                        <div class="control-group">
+                            <label for="textInput">Text:</label>
+                            <input type="text" id="textInput" placeholder="Enter your text" />
+                        </div>
+                        
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label for="fontSize">Size:</label>
+                                <input type="range" id="fontSize" min="12" max="72" value="24" />
+                                <span id="fontSizeValue">24px</span>
+                            </div>
+                            
+                            <div class="control-group">
+                                <label for="textColor">Color:</label>
+                                <input type="color" id="textColor" value="#ffffff" />
+                            </div>
+                        </div>
+                        
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label for="fontFamily">Font:</label>
+                                <select id="fontFamily">
+                                    <option value="Arial, sans-serif">Arial</option>
+                                    <option value="Impact, Charcoal, sans-serif">Impact</option>
+                                    <option value="Times New Roman, serif">Times New Roman</option>
+                                    <option value="Courier New, monospace">Courier New</option>
+                                    <option value="Helvetica, sans-serif">Helvetica</option>
+                                </select>
+                            </div>
+                            
+                            <div class="control-group">
+                                <label>
+                                    <input type="checkbox" id="boldText" />
+                                    Bold
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label for="strokeWidth">Outline:</label>
+                                <input type="range" id="strokeWidth" min="0" max="8" value="2" />
+                                <span id="strokeWidthValue">2px</span>
+                            </div>
+                            
+                            <div class="control-group">
+                                <label for="strokeColor">Outline Color:</label>
+                                <input type="color" id="strokeColor" value="#000000" />
+                            </div>
+                                <div class="control-group">
+                                    <label for="qualityPreset">Quality / Size:</label>
+                                    <select id="qualityPreset">
+                                        <option value="balanced" selected>Balanced (default)</option>
+                                        <option value="high">High Quality (larger)</option>
+                                        <option value="economy">Economy (smallest)</option>
+                                    </select>
+                                </div>
+                        </div>
+                        
+                        <div class="button-group">
+                            <button id="addTextBtn">Add Text</button>
+                            <button id="clearTextBtn">Clear All Text</button>
+                            <button id="generateGifBtn">Create Animated GIF</button>
+                            <button id="quickGifBtn">Quick Static Image</button>
+                            <button id="compatGifBtn" title="Optimized for Facebook/Messenger">Messenger Compatible GIF</button>
+                        </div>
+                        
+                        <div class="playback-controls">
+                            <button id="playPauseBtn">⏸️ Pause</button>
+                            <button id="prevFrameBtn">⏮️ Prev</button>
+                            <button id="nextFrameBtn">⏭️ Next</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Progress and Download -->
+            <section class="download-section" id="downloadSection" style="display: none;">
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <p id="progressText">Generating GIF...</p>
+                </div>
+                <button id="downloadBtn" style="display: none;">Download GIF</button>
+            </section>
+        </main>
+    </div>
+
+    <script src="gif.min.js"></script>
+    <!-- Optional: host a same-origin worker file for gif.js to avoid any CDN hiccups -->
+    <!-- If you add gif.worker.js locally, script.js will prefer it automatically -->
+    <script src="script.js"></script>
+</body>
+</html>
