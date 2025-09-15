@@ -30,6 +30,34 @@
         }
     })();
     </script>
+    <script type="module">
+    // Preload gifenc (global-palette encoder) into window.__gifenc with robust fallbacks
+    (async () => {
+        if (!window.__gifenc) {
+            // Try local vendor first, then jsDelivr +esm, then unpkg root (ESM)
+            const sources = [
+                './vendor/gifenc.esm.js',
+                'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/+esm',
+                'https://unpkg.com/gifenc@1.0.3'
+            ];
+            for (const src of sources) {
+                try {
+                    const m = await import(src);
+                    if (m && (m.GIFEncoder || m.quantize || m.applyPalette || m.default)) {
+                        window.__gifenc = m;
+                        console.log('gifenc loaded from', src);
+                        break;
+                    }
+                } catch (e) {
+                    console.warn('gifenc load failed from', src, e);
+                }
+            }
+            if (!window.__gifenc) {
+                console.warn('gifenc could not be preloaded; global-compat encoder will attempt runtime fallbacks.');
+            }
+        }
+    })();
+    </script>
 </head>
 <body>
     <div class="container">

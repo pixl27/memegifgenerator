@@ -184,7 +184,7 @@ class GifMemeGenerator {
         document.getElementById('generateGifBtn').addEventListener('click', () => this.generateGif());
         document.getElementById('quickGifBtn').addEventListener('click', () => this.generateQuickGif());
     const compatBtn = document.getElementById('compatGifBtn');
-    if (compatBtn) compatBtn.addEventListener('click', () => this.generateCompatGif());
+    if (compatBtn) compatBtn.addEventListener('click', () => this.generateCompatGifGlobal());
     }
 
     loadApiKey() {
@@ -1212,6 +1212,209 @@ class GifMemeGenerator {
             this.showMessage('Compat GIF failed','error');
         } finally {
             btn.disabled = false; btn.textContent = oldLabel;
+        }
+    }
+
+    // New: Global-palette Messenger encoder using gifenc
+    async generateCompatGifGlobal() {
+        if (!this.selectedGif) { this.showMessage('Select a GIF first', 'error'); return; }
+        if (this.textOverlays.length === 0) { this.showMessage('Add some text first', 'error'); return; }
+        const btn = document.getElementById('compatGifBtn');
+        const dl = document.getElementById('downloadSection');
+        dl.style.display = 'block'; requestAnimationFrame(()=>dl.classList.add('active'));
+        dl.scrollIntoView({ behavior: 'smooth' });
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        btn.disabled = true; const oldLabel = btn.textContent; btn.textContent = 'Encoding...';
+        try {
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Loading encoder...';
+            // Prefer preloaded module
+            let mod = window.__gifenc || null;
+            // Try a few resilient sources if not already loaded
+            const trySources = async () => {
+                const sources = [
+                    './vendor/gifenc.esm.js',
+                    'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/+esm',
+                    'https://unpkg.com/gifenc@1.0.3'
+                ];
+                for (const src of sources) {
+                    try {
+                        const m = await import(src);
+                        if (m) return m;
+                    } catch (e) {
+                        console.warn('gifenc runtime import failed from', src, e);
+                    }
+                }
+                return null;
+            };
+            if (!mod) mod = await trySources();
+            const GIFEncoder = (mod && (mod.GIFEncoder || (mod.default && mod.default.GIFEncoder))) || null;
+            const quantize = (mod && (mod.quantize || (mod.default && mod.default.quantize))) || null;
+            const applyPalette = (mod && (mod.applyPalette || (mod.default && mod.default.applyPalette))) || null;
+            if (!GIFEncoder || typeof quantize !== 'function' || typeof applyPalette !== 'function') {
+                throw new Error('gifenc not available');
+            }
+            const maxDim = 300;
+            const minDelay = 80; // ms, clamp per-frame delays
+
+            // Prepare frames (compose base + text)
+            let frames = (this.gifFrames && this.gifFrames.length) ? this.gifFrames.slice() : [];
+            if (!frames.length) {
+                this.showMessage('No frames available for encoding, using fallback encoder...', 'error');
+                throw new Error('No frames to encode');
+            }
+            // Cap frames to something reasonable for size (Messenger compatibility)
+            // Allow more frames but still keep it reasonable to avoid file size issues
+            const maxFrames = 200; // Increased to 200 to preserve longer animations
+            if (frames.length > maxFrames) frames = frames.slice(0, maxFrames);
+
+            // Build a sample set to compute a single global palette
+            const sampleCount = Math.max(1, Math.min(16, frames.length));
+            const step = Math.max(1, Math.floor(frames.length / sampleCount));
+            const samples = [];
+
+            // Canvas to draw composed frames
+            const srcW = this.canvas.width, srcH = this.canvas.height;
+            const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
+            const encW = Math.max(1, Math.round(srcW * scale));
+            const encH = Math.max(1, Math.round(srcH * scale));
+            const encCanvas = document.createElement('canvas');
+            encCanvas.width = encW; encCanvas.height = encH;
+            const encCtx = encCanvas.getContext('2d', { willReadFrequently:true });
+
+            const rgbaFromCanvas = (cvs) => {
+                const id = encCtx.getImageData(0,0,encW,encH);
+                return id.data; // Uint8ClampedArray RGBA
+            };
+
+            try {
+                for (let i=0;i<frames.length;i+=step) {
+                    const f = frames[i]; const img=(f.canvas||f.image)||f;
+                    this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
+                    // Solid background to remove transparency
+                    this.ctx.fillStyle = '#000000';
+                    this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+                    this.ctx.drawImage(img,0,0,this.canvas.width,this.canvas.height);
+                    this.textOverlays.forEach(o=>this.drawText(o));
+                    encCtx.clearRect(0,0,encW,encH);
+                    encCtx.fillStyle = '#000000';
+                    encCtx.fillRect(0,0,encW,encH);
+                    encCtx.drawImage(this.canvas,0,0,encW,encH);
+                    samples.push(new Uint8Array(rgbaFromCanvas(encCanvas)));
+                    if (samples.length >= sampleCount) break;
+                }
+            } catch (imgErr) {
+                console.warn('getImageData failed during palette sampling, falling back', imgErr);
+                throw imgErr;
+            }
+
+            progressFill.style.width = '25%';
+            progressText.textContent = 'Computing global palette...';
+
+            // Concatenate sample RGBA for quantization
+            let concatLen = samples.reduce((a,s)=>a+s.length,0);
+            const all = new Uint8Array(concatLen);
+            let off=0; for (const s of samples) { all.set(s, off); off += s.length; }
+            // Quantize to 256 colors (or fewer)
+            let palette = quantize(all, 128);
+            if (!palette || !palette.length) {
+                this.showMessage('Palette generation failed, using fallback encoder...', 'error');
+                throw new Error('Empty palette');
+            }
+            // Always output a 256-color GCT, padded with black (#000000) to match working GIFs
+            if (palette.length < 256) {
+                const padColor = [0, 0, 0]; // Always pad with black, not the last color
+                while (palette.length < 256) palette.push(padColor.slice());
+            } else if (palette.length > 256) {
+                palette = palette.slice(0, 256);
+            }
+
+            // Setup GIFEncoder (gifenc) with default options that match working GIFs
+            const enc = new GIFEncoder({ auto: true });
+
+            progressFill.style.width = '45%';
+            progressText.textContent = 'Adding frames...';
+
+            // Now encode each frame using the same palette
+            const total = frames.length;
+            let written = 0;
+            for (let i=0;i<total;i++) {
+                const f = frames[i]; const img=(f.canvas||f.image)||f;
+                this.ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
+                this.ctx.fillStyle = '#000000';
+                this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+                this.ctx.drawImage(img,0,0,this.canvas.width,this.canvas.height);
+                this.textOverlays.forEach(o=>this.drawText(o));
+                encCtx.clearRect(0,0,encW,encH);
+                encCtx.fillStyle = '#000000';
+                encCtx.fillRect(0,0,encW,encH);
+                encCtx.drawImage(this.canvas,0,0,encW,encH);
+                let id;
+                try {
+                    id = encCtx.getImageData(0,0,encW,encH);
+                } catch (idErr) {
+                    console.warn('getImageData failed while writing frames; falling back', idErr);
+                    throw idErr;
+                }
+                // Map RGBA -> palette indices using the precomputed global palette
+                const indexStream = applyPalette(id.data, palette);
+                if (!indexStream || indexStream.length === 0) {
+                    console.warn('applyPalette returned empty indices; aborting to fallback');
+                    throw new Error('Empty index stream');
+                }
+                const delay = Math.max(minDelay, f.delay || this.frameDelay || 100);
+                // Match working GIFs: transparent: false, transparencyIndex: 255, dispose: 0, repeat: 0 (endless loop)
+                const frameOptions = {
+                    palette,
+                    delay,
+                    dispose: 0,  // Use dispose: 0 like working GIFs, not dispose: 2
+                    transparent: false,
+                    transparentIndex: 255
+                };
+                // Add repeat: 0 (endless loop) for the first frame only
+                if (i === 0) {
+                    frameOptions.repeat = 0;
+                }
+                enc.writeFrame(indexStream, encW, encH, frameOptions);
+                written++;
+                const pct = 45 + Math.round(((i+1)/total)*45);
+                progressFill.style.width = pct+'%';
+                progressText.textContent = `Adding frame ${i+1}/${total}`;
+                await new Promise(r=>setTimeout(r,0));
+            }
+            if (!written) {
+                this.showMessage('No frames were written to GIF, using fallback encoder...', 'error');
+                throw new Error('No frames written');
+            }
+
+            progressText.textContent = 'Finalizing...';
+            enc.finish(); // Write end-of-stream character (no parameters needed)
+            const bytes = enc.bytes(); // Get the Uint8Array output
+            const blob = new Blob([bytes], { type:'image/gif' });
+            // Validate the result; bail out if clearly invalid or tiny
+            let valid = true;
+            try {
+                const meta = await this.validateGif(blob);
+                valid = Boolean(meta && meta.ok && meta.frames > 0);
+            } catch {}
+            if (!valid || (blob && blob.size && blob.size < 64)) {
+                console.warn('Global palette result invalid or too small (', blob && blob.size, 'bytes ), falling back');
+                throw new Error('Invalid tiny GIF output');
+            }
+            this.setupDownload(blob, 'gif');
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Messenger compatible GIF (global palette) ready';
+        } catch (e) {
+            console.warn('Global encoder failed, falling back to legacy compat path', e);
+            try {
+                await this.generateCompatGif();
+            } catch(e2) {
+                this.showMessage('Compat GIF failed','error');
+            }
+        } finally {
+            const btn = document.getElementById('compatGifBtn');
+            if (btn) { btn.disabled = false; btn.textContent = 'Messenger Compatible GIF'; }
         }
     }
 
