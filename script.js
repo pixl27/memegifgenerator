@@ -1057,8 +1057,8 @@ class GifMemeGenerator {
         try {
             progressFill.style.width = '0%';
             progressText.textContent = 'Messenger mode: preparing frames...';
-            // Build conservative frame list (sample)
-            let targetDelay = 90; // a bit slower reduces size
+            // Build conservative frame list but preserve original timing
+            let targetDelay = null; // Use original delays instead of forcing 90ms
             let maxDim = 300;     // constrain both width & height
             let frames = this.gifFrames.slice();
             // basic FPS cap ~1000/targetDelay
@@ -1127,7 +1127,9 @@ class GifMemeGenerator {
                 encCtx.fillStyle = '#000000';
                 encCtx.fillRect(0,0,encW,encH);
                 encCtx.drawImage(this.canvas,0,0,encW,encH);
-                gif.addFrame(encCanvas,{ delay: targetDelay, copy:true, dispose:2 });
+                // Use original frame delay to preserve smoothness
+                const frameDelay = f.delay || this.frameDelay || 100;
+                gif.addFrame(encCanvas,{ delay: frameDelay, copy:true, dispose:2 });
                 const pct = Math.round(((i+1)/frames.length)*60);
                 progressFill.style.width = pct+'%';
                 progressText.textContent = `Adding frame ${i+1}/${frames.length}`;
@@ -1157,9 +1159,10 @@ class GifMemeGenerator {
             // Adaptive retries if too large
             while (blob.size > targetBytes && attempt <= 2) {
                 this.showMessage(`Optimizing for Messenger (pass ${attempt+1})...`, 'info');
-                // Tweak settings: shrink width and increase quality number (more compression), slower delay
+                // Tweak settings: shrink width and increase quality number (more compression)
                 maxDim = Math.round(maxDim * 0.8);
-                targetDelay = Math.min(140, targetDelay + 10);
+                // Keep original timing - don't slow down further
+                // targetDelay = Math.min(140, targetDelay + 10); // REMOVED
                 const qBump = 6 * attempt;
                 const newQuality = 26 + qBump;
 
@@ -1186,7 +1189,9 @@ class GifMemeGenerator {
                     encCtx.fillStyle = '#000000';
                     encCtx.fillRect(0,0,nW,nH);
                     encCtx.drawImage(this.canvas,0,0,nW,nH);
-                    gif.addFrame(encCanvas,{ delay: targetDelay, copy:true, dispose:2 });
+                    // Preserve original frame timing even in retries
+                    const retryDelay = frames[idx].delay || this.frameDelay || 100;
+                    gif.addFrame(encCanvas,{ delay: retryDelay, copy:true, dispose:2 });
                     const pctBase = 65;
                     const pct = pctBase + Math.round(((i+1)/totalOut)*20);
                     progressFill.style.width = Math.min(90, pct)+'%';
@@ -1256,7 +1261,8 @@ class GifMemeGenerator {
                 throw new Error('gifenc not available');
             }
             const maxDim = 300;
-            const minDelay = 80; // ms, clamp per-frame delays
+            // Don't clamp delays - use original timing to preserve smoothness
+            // const minDelay = 80; // REMOVED - this was making animations too slow
 
             // Prepare frames (compose base + text)
             let frames = (this.gifFrames && this.gifFrames.length) ? this.gifFrames.slice() : [];
@@ -1264,6 +1270,13 @@ class GifMemeGenerator {
                 this.showMessage('No frames available for encoding, using fallback encoder...', 'error');
                 throw new Error('No frames to encode');
             }
+            
+            // Apply frame smoothing if selected
+            const smoothingType = document.getElementById('frameSmoothing')?.value || 'none';
+            if (smoothingType !== 'none') {
+                frames = this.applySmoothingToFrames(frames, smoothingType);
+            }
+            
             // Cap frames to something reasonable for size (Messenger compatibility)
             // Allow more frames but still keep it reasonable to avoid file size issues
             const maxFrames = 200; // Increased to 200 to preserve longer animations
@@ -1363,7 +1376,8 @@ class GifMemeGenerator {
                     console.warn('applyPalette returned empty indices; aborting to fallback');
                     throw new Error('Empty index stream');
                 }
-                const delay = Math.max(minDelay, f.delay || this.frameDelay || 100);
+                // Use original frame delay to preserve animation smoothness
+                const delay = f.delay || this.frameDelay || 100;
                 // Match working GIFs: transparent: false, transparencyIndex: 255, dispose: 0, repeat: 0 (endless loop)
                 const frameOptions = {
                     palette,
@@ -1431,7 +1445,9 @@ class GifMemeGenerator {
                     this.textOverlays.forEach(o=>this.drawText(o));
                     encCtx.clearRect(0,0,encW,encH);
                     encCtx.drawImage(this.canvas,0,0,encW,encH);
-                    gif2.addFrame(encCanvas,{ delay, copy:true });
+                    // Use original frame delay instead of fixed delay
+                    const frameDelay = f.delay || this.frameDelay || delay || 100;
+                    gif2.addFrame(encCanvas,{ delay: frameDelay, copy:true });
                 }
                 gif2.on('finished', b=>resolve(b));
                 gif2.on('abort', ()=>reject(new Error('Fallback abort')));
@@ -1811,6 +1827,103 @@ class GifMemeGenerator {
                 reject(error);
             }
         });
+    }
+
+    // Apply smoothing to frames to improve animation quality
+    applySmoothingToFrames(frames, smoothingType) {
+        if (smoothingType === 'interpolate') {
+            return this.interpolateFrames(frames);
+        } else if (smoothingType === 'blend') {
+            return this.blendFrameTransitions(frames);
+        }
+        return frames;
+    }
+
+    // Add intermediate frames between existing frames for smoother animation
+    interpolateFrames(frames) {
+        if (frames.length < 2) return frames;
+        
+        const smoothedFrames = [];
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = frames[0].canvas ? frames[0].canvas.width : frames[0].width;
+        tempCanvas.height = frames[0].canvas ? frames[0].canvas.height : frames[0].height;
+        const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+        
+        for (let i = 0; i < frames.length; i++) {
+            // Add original frame
+            smoothedFrames.push(frames[i]);
+            
+            // Add interpolated frame between this and next (except for last frame)
+            if (i < frames.length - 1) {
+                const currentFrame = frames[i].canvas || frames[i];
+                const nextFrame = frames[i + 1].canvas || frames[i + 1];
+                
+                // Create blended intermediate frame
+                tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+                tempCtx.globalAlpha = 0.6;
+                tempCtx.drawImage(currentFrame, 0, 0);
+                tempCtx.globalAlpha = 0.4;
+                tempCtx.drawImage(nextFrame, 0, 0);
+                tempCtx.globalAlpha = 1.0;
+                
+                // Create canvas copy for the interpolated frame
+                const interpCanvas = document.createElement('canvas');
+                interpCanvas.width = tempCanvas.width;
+                interpCanvas.height = tempCanvas.height;
+                const interpCtx = interpCanvas.getContext('2d');
+                interpCtx.drawImage(tempCanvas, 0, 0);
+                
+                // Use half the delay of the original frame
+                const avgDelay = Math.max(40, (frames[i].delay || 100) / 2);
+                smoothedFrames.push({ canvas: interpCanvas, delay: avgDelay });
+            }
+        }
+        
+        return smoothedFrames;
+    }
+
+    // Apply subtle blending between consecutive frames
+    blendFrameTransitions(frames) {
+        if (frames.length < 2) return frames;
+        
+        const blendedFrames = [];
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = frames[0].canvas ? frames[0].canvas.width : frames[0].width;
+        tempCanvas.height = frames[0].canvas ? frames[0].canvas.height : frames[0].height;
+        const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+        
+        for (let i = 0; i < frames.length; i++) {
+            const currentFrame = frames[i].canvas || frames[i];
+            
+            if (i === 0) {
+                // First frame - no blending
+                blendedFrames.push(frames[i]);
+            } else {
+                // Blend with previous frame for smoother transitions
+                const prevFrame = frames[i - 1].canvas || frames[i - 1];
+                
+                tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+                tempCtx.globalAlpha = 0.15; // Subtle blend with previous
+                tempCtx.drawImage(prevFrame, 0, 0);
+                tempCtx.globalAlpha = 0.85; // Mostly current frame
+                tempCtx.drawImage(currentFrame, 0, 0);
+                tempCtx.globalAlpha = 1.0;
+                
+                // Create canvas copy for the blended frame
+                const blendCanvas = document.createElement('canvas');
+                blendCanvas.width = tempCanvas.width;
+                blendCanvas.height = tempCanvas.height;
+                const blendCtx = blendCanvas.getContext('2d');
+                blendCtx.drawImage(tempCanvas, 0, 0);
+                
+                blendedFrames.push({ 
+                    canvas: blendCanvas, 
+                    delay: frames[i].delay || 100 
+                });
+            }
+        }
+        
+        return blendedFrames;
     }
 
     setupDownload(blob, format = 'gif') {
