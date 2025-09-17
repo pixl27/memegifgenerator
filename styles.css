@@ -322,16 +322,153 @@ header p {
     background: transparent;
     min-width: 24px;
     min-height: 24px;
+    border: 2px dashed transparent;
+    box-sizing: border-box;
 }
 
 .text-overlay:hover {
-    outline: 2px dashed #667eea;
-    outline-offset: 2px;
+    border-color: #667eea;
+    outline: none;
 }
 
 .text-overlay.selected {
-    outline: 2px dashed #667eea;
-    outline-offset: 2px;
+    border-color: #4CAF50 !important;
+    outline: none;
+}
+
+/* Resize handles */
+.resize-handle {
+    position: absolute;
+    background: #4CAF50;
+    border: 2px solid #fff;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    pointer-events: auto;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 15;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.text-overlay.selected .resize-handle {
+    opacity: 1 !important;
+}
+
+.text-overlay:hover .resize-handle {
+    opacity: 0.7;
+}
+
+.resize-handle.nw-resize {
+    top: -6px;
+    left: -6px;
+    cursor: nw-resize;
+}
+
+.resize-handle.ne-resize {
+    top: -6px;
+    right: -6px;
+    cursor: ne-resize;
+}
+
+.resize-handle.sw-resize {
+    bottom: -6px;
+    left: -6px;
+    cursor: sw-resize;
+}
+
+/* Rainbow glow effect for Messenger button */
+.rainbow-glow-btn {
+    position: relative;
+    background: linear-gradient(45deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3, #ff0000);
+    background-size: 400% 400%;
+    color: white !important;
+    font-weight: bold;
+    text-shadow: 0 0 10px rgba(0,0,0,0.8);
+    border: none;
+    border-radius: 12px;
+    padding: 12px 24px;
+    font-size: 16px;
+    cursor: pointer;
+    overflow: hidden;
+    animation: rainbowGlow 3s ease-in-out infinite, gradientShift 4s ease-in-out infinite;
+    box-shadow: 
+        0 0 20px rgba(255,0,255,0.6),
+        0 0 40px rgba(0,255,255,0.4),
+        0 0 60px rgba(255,255,0,0.3),
+        inset 0 0 20px rgba(255,255,255,0.2);
+    transition: all 0.3s ease;
+}
+
+.rainbow-glow-btn:hover {
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 
+        0 0 30px rgba(255,0,255,0.8),
+        0 0 60px rgba(0,255,255,0.6),
+        0 0 80px rgba(255,255,0,0.4),
+        inset 0 0 30px rgba(255,255,255,0.3);
+}
+
+.rainbow-glow-btn:active {
+    transform: translateY(0) scale(1.02);
+}
+
+.rainbow-glow-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    animation: none;
+    transform: none;
+}
+
+@keyframes rainbowGlow {
+    0%, 100% {
+        box-shadow: 
+            0 0 20px rgba(255,0,0,0.8),
+            0 0 40px rgba(255,127,0,0.6),
+            0 0 60px rgba(255,255,0,0.4);
+    }
+    16.67% {
+        box-shadow: 
+            0 0 20px rgba(255,127,0,0.8),
+            0 0 40px rgba(255,255,0,0.6),
+            0 0 60px rgba(0,255,0,0.4);
+    }
+    33.33% {
+        box-shadow: 
+            0 0 20px rgba(255,255,0,0.8),
+            0 0 40px rgba(0,255,0,0.6),
+            0 0 60px rgba(0,0,255,0.4);
+    }
+    50% {
+        box-shadow: 
+            0 0 20px rgba(0,255,0,0.8),
+            0 0 40px rgba(0,0,255,0.6),
+            0 0 60px rgba(75,0,130,0.4);
+    }
+    66.67% {
+        box-shadow: 
+            0 0 20px rgba(0,0,255,0.8),
+            0 0 40px rgba(75,0,130,0.6),
+            0 0 60px rgba(148,0,211,0.4);
+    }
+    83.33% {
+        box-shadow: 
+            0 0 20px rgba(75,0,130,0.8),
+            0 0 40px rgba(148,0,211,0.6),
+            0 0 60px rgba(255,0,255,0.4);
+    }
+}
+
+@keyframes gradientShift {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
 }
 
 /* Controls */

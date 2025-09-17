@@ -140,6 +140,7 @@ class GifMemeGenerator {
         this.setupEventListeners();
         this.loadApiKey();
         this.setupCanvas();
+        this.setupOverlayDeselection();
     }
 
     setupEventListeners() {
@@ -181,7 +182,6 @@ class GifMemeGenerator {
         document.getElementById('nextFrameBtn').addEventListener('click', () => this.nextFrame());
 
         // GIF generation
-        document.getElementById('generateGifBtn').addEventListener('click', () => this.generateGif());
         document.getElementById('quickGifBtn').addEventListener('click', () => this.generateQuickGif());
     const compatBtn = document.getElementById('compatGifBtn');
     if (compatBtn) compatBtn.addEventListener('click', () => this.generateCompatGifGlobal());
@@ -833,10 +833,113 @@ class GifMemeGenerator {
     overlayElement.style.left = `${crect.left + (overlay.x - boxW / 2)}px`;
     overlayElement.style.top = `${crect.top + (overlay.y - boxH / 2)}px`;
 
-        // Make draggable
+        // Add resize handles
+        this.addResizeHandles(overlayElement);
+
+        // Make draggable and resizable
         this.makeDraggable(overlayElement, overlay, boxW, boxH);
+        this.makeResizable(overlayElement, overlay);
+
+        console.log('Created text overlay element with', overlayElement.children.length, 'child elements');
 
         document.getElementById('textOverlays').appendChild(overlayElement);
+    }    addResizeHandles(element) {
+        console.log('Adding resize handles...');
+        const handles = ['nw-resize', 'ne-resize', 'sw-resize', 'se-resize'];
+        handles.forEach(handle => {
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = `resize-handle ${handle}`;
+            resizeHandle.style.pointerEvents = 'auto';
+            resizeHandle.style.display = 'block';
+            element.appendChild(resizeHandle);
+            console.log('Added resize handle:', handle);
+        });
+        console.log('All resize handles added, element children:', element.children.length);
+    }
+
+    makeResizable(element, overlay) {
+        const handles = element.querySelectorAll('.resize-handle');
+        
+        handles.forEach(handle => {
+            handle.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                
+                element.classList.add('selected');
+                
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const startWidth = parseInt(element.style.width);
+                const startHeight = parseInt(element.style.height);
+                const startLeft = parseInt(element.style.left);
+                const startTop = parseInt(element.style.top);
+                const startFontSize = overlay.fontSize;
+                
+                const handleClass = handle.className.split(' ')[1];
+                
+                const onMouseMove = (e) => {
+                    const deltaX = e.clientX - startX;
+                    const deltaY = e.clientY - startY;
+                    
+                    let newWidth = startWidth;
+                    let newHeight = startHeight;
+                    let newLeft = startLeft;
+                    let newTop = startTop;
+                    
+                    // Calculate new dimensions based on handle direction
+                    switch(handleClass) {
+                        case 'se-resize': // Bottom-right
+                            newWidth = Math.max(30, startWidth + deltaX);
+                            newHeight = Math.max(20, startHeight + deltaY);
+                            break;
+                        case 'sw-resize': // Bottom-left
+                            newWidth = Math.max(30, startWidth - deltaX);
+                            newHeight = Math.max(20, startHeight + deltaY);
+                            newLeft = startLeft + (startWidth - newWidth);
+                            break;
+                        case 'ne-resize': // Top-right
+                            newWidth = Math.max(30, startWidth + deltaX);
+                            newHeight = Math.max(20, startHeight - deltaY);
+                            newTop = startTop + (startHeight - newHeight);
+                            break;
+                        case 'nw-resize': // Top-left
+                            newWidth = Math.max(30, startWidth - deltaX);
+                            newHeight = Math.max(20, startHeight - deltaY);
+                            newLeft = startLeft + (startWidth - newWidth);
+                            newTop = startTop + (startHeight - newHeight);
+                            break;
+                    }
+                    
+                    // Update element size and position
+                    element.style.width = newWidth + 'px';
+                    element.style.height = newHeight + 'px';
+                    element.style.left = newLeft + 'px';
+                    element.style.top = newTop + 'px';
+                    
+                    // Calculate new font size based on width change
+                    const scaleFactor = newWidth / startWidth;
+                    const newFontSize = Math.max(8, Math.min(72, Math.round(startFontSize * scaleFactor)));
+                    overlay.fontSize = newFontSize;
+                    
+                    // Update overlay position (center point)
+                    const crect = this.getCanvasRectRelative();
+                    overlay.x = (newLeft - crect.left) + newWidth / 2;
+                    overlay.y = (newTop - crect.top) + newHeight / 2;
+                    
+                    // Redraw with new font size
+                    this.drawCurrentFrame();
+                };
+                
+                const onMouseUp = () => {
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    element.classList.remove('selected');
+                };
+                
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        });
     }
 
     makeDraggable(element, overlay, boxW = 0, boxH = 0) {
@@ -845,6 +948,9 @@ class GifMemeGenerator {
         const overlayRoot = document.getElementById('textOverlays');
 
         element.addEventListener('mousedown', (e) => {
+            // Don't start dragging if clicking on a resize handle
+            if (e.target.classList.contains('resize-handle')) return;
+            
             isDragging = true;
             element.classList.add('selected');
             // Starting pointer position in viewport
@@ -894,10 +1000,105 @@ class GifMemeGenerator {
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
 
-        // Double-click to remove
-        element.addEventListener('dblclick', () => {
+        // Double-click to edit text inline
+        element.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            this.editTextOverlayInline(overlay, element);
+        });
+
+        // Right-click to remove
+        element.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
             this.removeTextOverlay(overlay.id);
         });
+
+        // Click to select (and deselect others)
+        element.addEventListener('click', (e) => {
+            e.stopPropagation();
+            console.log('Text overlay clicked, selecting...');
+            // Deselect all other overlays
+            document.querySelectorAll('.text-overlay.selected').forEach(el => {
+                if (el !== element) {
+                    el.classList.remove('selected');
+                    console.log('Deselected other overlay');
+                }
+            });
+            element.classList.add('selected');
+            console.log('Selected overlay, handles should be visible');
+        });
+    }
+
+    // Deselect all overlays when clicking outside
+    setupOverlayDeselection() {
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.text-overlay') && !e.target.closest('#textOverlays')) {
+                document.querySelectorAll('.text-overlay.selected').forEach(el => {
+                    el.classList.remove('selected');
+                });
+            }
+        });
+    }
+
+    editTextOverlayInline(overlay, element) {
+        // Create an input field positioned over the overlay
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = overlay.text;
+        input.style.cssText = `
+            position: absolute;
+            left: ${element.style.left};
+            top: ${element.style.top};
+            width: ${element.style.width};
+            height: ${element.style.height};
+            font-size: ${Math.max(14, overlay.fontSize * 0.6)}px;
+            font-family: ${overlay.fontFamily};
+            font-weight: ${overlay.bold ? 'bold' : 'normal'};
+            color: ${overlay.color};
+            background: rgba(0,0,0,0.8);
+            border: 2px solid ${overlay.color};
+            border-radius: 4px;
+            text-align: center;
+            z-index: 1000;
+            outline: none;
+            padding: 4px;
+        `;
+
+        // Hide the original overlay element while editing
+        element.style.display = 'none';
+        
+        // Add input to the overlay container
+        document.getElementById('textOverlays').appendChild(input);
+        
+        // Focus and select all text
+        input.focus();
+        input.select();
+
+        const finishEditing = () => {
+            const newText = input.value.trim();
+            if (newText && newText !== overlay.text) {
+                // Update the overlay text
+                overlay.text = newText;
+                // Redraw the current frame to show the change
+                this.drawCurrentFrame();
+            }
+            
+            // Remove the input and show the overlay again
+            input.remove();
+            element.style.display = 'block';
+        };
+
+        // Save on Enter or when losing focus
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                finishEditing();
+            } else if (e.key === 'Escape') {
+                // Cancel editing - just remove input without saving
+                input.remove();
+                element.style.display = 'block';
+            }
+        });
+
+        input.addEventListener('blur', finishEditing);
     }
 
     removeTextOverlay(id) {
@@ -973,74 +1174,6 @@ class GifMemeGenerator {
             // Re-enable button
             quickBtn.disabled = false;
             quickBtn.textContent = 'Quick Static Image';
-        }
-    }
-
-    async generateGif() {
-        if (!this.selectedGif) {
-            this.showMessage('Please select a GIF first', 'error');
-            return;
-        }
-
-        if (this.textOverlays.length === 0) {
-            this.showMessage('Please add some text first', 'error');
-            return;
-        }
-
-    const dl = document.getElementById('downloadSection');
-    dl.style.display = 'block';
-    requestAnimationFrame(() => dl.classList.add('active'));
-    dl.scrollIntoView({ behavior: 'smooth' });
-
-        const progressFill = document.getElementById('progressFill');
-        const progressText = document.getElementById('progressText');
-        const generateBtn = document.getElementById('generateGifBtn');
-
-        // Disable generate button during processing
-        generateBtn.disabled = true;
-        generateBtn.textContent = 'Creating GIF...';
-
-        try {
-            // Pause any ongoing canvas animation to reduce contention
-            const wasPlaying = this.isPlaying;
-            this.isPlaying = false;
-            if (this.animationId) {
-                cancelAnimationFrame(this.animationId);
-                this.animationId = null;
-            }
-
-            // Reset progress
-            progressFill.style.width = '0%';
-            progressText.textContent = 'Starting animated GIF creation...';
-
-            // Try to create actual animated GIF
-            console.log('Attempting to create REAL animated GIF...');
-            await this.generateWithGifJs(progressFill, progressText);
-            this.showMessage('Animated GIF created successfully! 🎉🎬', 'success');
-            
-        } catch (error) {
-            console.error('GIF generation failed:', error);
-            this.showMessage('GIF generation failed. Creating high-quality static image instead...', 'error');
-            // Fallback to static image
-            try {
-                progressText.textContent = 'Creating static meme image...';
-                progressFill.style.width = '0%';
-                await this.generateStaticImage(progressFill, progressText);
-                this.showMessage('Static meme image created! (Try "Quick Meme" for guaranteed results)', 'success');
-            } catch (fallbackError) {
-                console.error('Fallback also failed:', fallbackError);
-                this.showMessage('Error creating image. Please try again.', 'error');
-                document.getElementById('downloadSection').style.display = 'none';
-            }
-        } finally {
-            // Resume animation playback if it was running before
-            if (this.isPlaying === false) {
-                this.isPlaying = true;
-                this.startAnimation();
-            }
-            // Re-enable generate button
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Create Animated GIF';
         }
     }
 
@@ -1239,7 +1372,6 @@ class GifMemeGenerator {
             // Try a few resilient sources if not already loaded
             const trySources = async () => {
                 const sources = [
-                    './vendor/gifenc.esm.js',
                     'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/+esm',
                     'https://unpkg.com/gifenc@1.0.3'
                 ];

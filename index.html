@@ -34,9 +34,8 @@
     // Preload gifenc (global-palette encoder) into window.__gifenc with robust fallbacks
     (async () => {
         if (!window.__gifenc) {
-            // Try local vendor first, then jsDelivr +esm, then unpkg root (ESM)
+            // Try working CDN sources (removed broken local vendor path)
             const sources = [
-                './vendor/gifenc.esm.js',
                 'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/+esm',
                 'https://unpkg.com/gifenc@1.0.3'
             ];
@@ -171,9 +170,8 @@
                         <div class="button-group">
                             <button id="addTextBtn">Add Text</button>
                             <button id="clearTextBtn">Clear All Text</button>
-                            <button id="generateGifBtn">Create Animated GIF</button>
                             <button id="quickGifBtn">Quick Static Image</button>
-                            <button id="compatGifBtn" title="Optimized for Facebook/Messenger">Messenger Compatible GIF</button>
+                            <button id="compatGifBtn" class="rainbow-glow-btn" title="Optimized for Facebook/Messenger">Create GIF for Messenger</button>
                         </div>
                         
                         <div class="playback-controls">
