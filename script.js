@@ -942,12 +942,48 @@ class GifMemeGenerator {
         const fontFamily = overlay.fontFamily || 'Impact, Arial, sans-serif';
         const bold = overlay.bold ? 'bold ' : '';
         
+        // Apply rotation if specified
+        if (overlay.rotation) {
+            this.ctx.translate(overlay.x, overlay.y);
+            this.ctx.rotate(overlay.rotation * Math.PI / 180);
+            this.ctx.translate(-overlay.x, -overlay.y);
+        }
+        
         this.ctx.font = `${bold}${fontSize}px ${fontFamily}`;
-        this.ctx.fillStyle = overlay.color || '#ffffff';
+        
+        // Handle special text styles
+        if (overlay.style === 'gradient') {
+            // Create gradient
+            const gradient = this.ctx.createLinearGradient(
+                overlay.x - fontSize * 2, overlay.y, 
+                overlay.x + fontSize * 2, overlay.y
+            );
+            gradient.addColorStop(0, '#ff0080');
+            gradient.addColorStop(0.2, '#ff8c00');
+            gradient.addColorStop(0.4, '#ffed00');
+            gradient.addColorStop(0.6, '#00ff80');
+            gradient.addColorStop(0.8, '#00bfff');
+            gradient.addColorStop(1, '#8000ff');
+            this.ctx.fillStyle = gradient;
+        } else if (overlay.style === 'neon') {
+            // Create neon glow effect
+            this.ctx.shadowColor = overlay.color || '#ffffff';
+            this.ctx.shadowBlur = fontSize / 3;
+            this.ctx.fillStyle = overlay.color || '#ffffff';
+        } else {
+            // Regular text
+            this.ctx.fillStyle = overlay.color || '#ffffff';
+        }
+        
         this.ctx.strokeStyle = overlay.strokeColor || '#000000';
         this.ctx.lineWidth = overlay.strokeWidth || 2;
-        this.ctx.textAlign = 'center';
+        this.ctx.textAlign = overlay.alignment || 'center';
         this.ctx.textBaseline = 'middle';
+        
+        // Apply opacity if specified
+        if (overlay.opacity !== undefined && overlay.opacity !== 1) {
+            this.ctx.globalAlpha = overlay.opacity;
+        }
         
         // Draw stroke (outline)
         if (overlay.strokeWidth > 0) {
@@ -984,14 +1020,25 @@ class GifMemeGenerator {
             fontFamily: document.getElementById('fontFamily').value,
             bold: document.getElementById('boldText').checked,
             strokeWidth: parseInt(document.getElementById('strokeWidth').value),
-            strokeColor: document.getElementById('strokeColor').value
+            strokeColor: document.getElementById('strokeColor').value,
+            rotation: 0, // Add rotation property
+            style: 'normal', // Add style property (normal, gradient, neon, etc)
+            alignment: 'center', // Text alignment
+            opacity: 1 // Opacity for text
         };
 
         this.textOverlays.push(overlay);
         this.createTextOverlayElement(overlay);
         textInput.value = '';
         
-        this.showMessage('Text added! Drag it to reposition.', 'success');
+        // Auto-select the new text for immediate editing (Instagram-like behavior)
+        const lastAddedElement = document.querySelector(`.text-overlay[data-id="${overlay.id}"]`);
+        if (lastAddedElement) {
+            this.selectTextOverlay(lastAddedElement, overlay);
+            this.editTextOverlayInline(overlay, lastAddedElement);
+        }
+        
+        this.showMessage('Text added! Type to edit.', 'success');
     }
 
     createTextOverlayElement(overlay) {
@@ -999,34 +1046,89 @@ class GifMemeGenerator {
         overlayElement.className = 'text-overlay';
         overlayElement.setAttribute('data-id', overlay.id);
 
-    // Measure text on canvas to size the invisible handle around text bounds
-        const measureCtx = this.ctx;
+        // Create visible text element (Instagram style)
+        const textElement = document.createElement('div');
+        textElement.className = 'overlay-text';
+        textElement.textContent = overlay.text;
+        
+        // Apply Instagram-like styling
         const bold = overlay.bold ? 'bold ' : '';
+        textElement.style.fontSize = `${overlay.fontSize}px`;
+        textElement.style.fontFamily = overlay.fontFamily;
+        textElement.style.fontWeight = overlay.bold ? 'bold' : 'normal';
+        textElement.style.color = overlay.color;
+        textElement.style.textAlign = overlay.alignment || 'center';
+        textElement.style.opacity = overlay.opacity || 1;
+        textElement.style.padding = '8px';
+        
+        // Apply text shadow/stroke
+        if (overlay.strokeWidth > 0) {
+            textElement.style.textShadow = `
+                -${overlay.strokeWidth}px -${overlay.strokeWidth}px 0 ${overlay.strokeColor},  
+                ${overlay.strokeWidth}px -${overlay.strokeWidth}px 0 ${overlay.strokeColor},
+                -${overlay.strokeWidth}px ${overlay.strokeWidth}px 0 ${overlay.strokeColor},
+                ${overlay.strokeWidth}px ${overlay.strokeWidth}px 0 ${overlay.strokeColor}`;
+        }
+        
+        // Apply special styles
+        if (overlay.style === 'gradient') {
+            textElement.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
+            textElement.style.backgroundClip = 'text';
+            textElement.style.webkitBackgroundClip = 'text';
+            textElement.style.color = 'transparent';
+            textElement.style.textShadow = 'none';
+        } else if (overlay.style === 'neon') {
+            textElement.style.textShadow = `0 0 5px ${overlay.color}, 0 0 10px ${overlay.color}, 0 0 15px ${overlay.color}`;
+        }
+        
+        overlayElement.appendChild(textElement);
+
+        // Measure text for overlay dimensions
+        const measureCtx = this.ctx;
         measureCtx.save();
         measureCtx.font = `${bold}${overlay.fontSize}px ${overlay.fontFamily}`;
         const metrics = measureCtx.measureText(overlay.text);
-        // rough box: width with padding, height approximated by fontSize
-        const pad = Math.max(6, Math.round(overlay.fontSize * 0.2));
+        // More generous padding for Instagram-style
+        const pad = Math.max(10, Math.round(overlay.fontSize * 0.25));
         const boxW = Math.ceil(metrics.width) + pad * 2;
-        const boxH = Math.ceil(overlay.fontSize * 1.25) + pad * 2;
+        const boxH = Math.ceil(overlay.fontSize * 1.5) + pad * 2;
         measureCtx.restore();
 
-    // Position box centered at overlay.x/y within the canvas rect (canvas text uses center alignment)
-    const crect = this.getCanvasRectRelative();
-    overlayElement.style.position = 'absolute';
-    overlayElement.style.width = `${boxW}px`;
-    overlayElement.style.height = `${boxH}px`;
-    overlayElement.style.left = `${crect.left + (overlay.x - boxW / 2)}px`;
-    overlayElement.style.top = `${crect.top + (overlay.y - boxH / 2)}px`;
+        // Position box centered at overlay.x/y within the canvas rect
+        const crect = this.getCanvasRectRelative();
+        overlayElement.style.position = 'absolute';
+        overlayElement.style.width = `${boxW}px`;
+        overlayElement.style.height = `${boxH}px`;
+        overlayElement.style.left = `${crect.left + (overlay.x - boxW / 2)}px`;
+        overlayElement.style.top = `${crect.top + (overlay.y - boxH / 2)}px`;
+        
+        // Apply rotation if specified
+        if (overlay.rotation) {
+            overlayElement.style.transform = `rotate(${overlay.rotation}deg)`;
+        }
+
+        // Add a rotation handle (Instagram style)
+        const rotationHandle = document.createElement('div');
+        rotationHandle.className = 'rotation-handle';
+        overlayElement.appendChild(rotationHandle);
 
         // Add resize handles
         this.addResizeHandles(overlayElement);
 
-        // Make draggable and resizable
+        // Make draggable, resizable and rotatable
         this.makeDraggable(overlayElement, overlay, boxW, boxH);
         this.makeResizable(overlayElement, overlay);
+        this.makeRotatable(overlayElement, overlay, rotationHandle);
 
-        console.log('Created text overlay element with', overlayElement.children.length, 'child elements');
+        // Add style controls (only visible when selected)
+        const styleControls = document.createElement('div');
+        styleControls.className = 'style-controls';
+        styleControls.innerHTML = `
+            <div class="style-btn" data-style="normal">Aa</div>
+            <div class="style-btn" data-style="gradient">🌈</div>
+            <div class="style-btn" data-style="neon">✨</div>
+        `;
+        overlayElement.appendChild(styleControls);
 
         document.getElementById('textOverlays').appendChild(overlayElement);
     }    addResizeHandles(element) {
@@ -1217,74 +1319,403 @@ class GifMemeGenerator {
     // Deselect all overlays when clicking outside
     setupOverlayDeselection() {
         document.addEventListener('click', (e) => {
+            // Close any open context menus
+            const contextMenu = document.getElementById('textContextMenu');
+            if (contextMenu) {
+                contextMenu.style.display = 'none';
+            }
+            
             if (!e.target.closest('.text-overlay') && !e.target.closest('#textOverlays')) {
                 document.querySelectorAll('.text-overlay.selected').forEach(el => {
                     el.classList.remove('selected');
+                    const styleControls = el.querySelector('.style-controls');
+                    if (styleControls) {
+                        styleControls.style.display = 'none';
+                    }
                 });
             }
         });
     }
+    
+    selectTextOverlay(element, overlay) {
+        // Deselect all other overlays
+        const allOverlays = document.querySelectorAll('.text-overlay');
+        allOverlays.forEach(o => {
+            o.classList.remove('selected');
+            const controls = o.querySelector('.style-controls');
+            if (controls) {
+                controls.style.display = 'none';
+            }
+        });
+        
+        // Select this overlay
+        element.classList.add('selected');
+        
+        // Show style controls for this overlay
+        const styleControls = element.querySelector('.style-controls');
+        if (styleControls) {
+            styleControls.style.display = 'flex';
+            
+            // Add style button handlers if not already added
+            if (!styleControls.dataset.initialized) {
+                styleControls.dataset.initialized = 'true';
+                const styleBtns = styleControls.querySelectorAll('.style-btn');
+                styleBtns.forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const style = btn.dataset.style;
+                        overlay.style = style;
+                        
+                        // Update active state
+                        styleBtns.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        
+                        // Update the text display
+                        const textElement = element.querySelector('.overlay-text');
+                        if (textElement) {
+                            // Reset styles
+                            textElement.style.background = '';
+                            textElement.style.backgroundClip = '';
+                            textElement.style.webkitBackgroundClip = '';
+                            textElement.style.textShadow = '';
+                            textElement.style.color = overlay.color;
+                            
+                            // Apply new style
+                            if (style === 'gradient') {
+                                textElement.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
+                                textElement.style.backgroundClip = 'text';
+                                textElement.style.webkitBackgroundClip = 'text';
+                                textElement.style.color = 'transparent';
+                            } else if (style === 'neon') {
+                                textElement.style.textShadow = `0 0 5px ${overlay.color}, 0 0 10px ${overlay.color}, 0 0 15px ${overlay.color}`;
+                            }
+                        }
+                        
+                        // Redraw
+                        this.drawCurrentFrame();
+                    });
+                });
+                
+                // Set initial active style
+                if (overlay.style) {
+                    const activeBtn = styleControls.querySelector(`.style-btn[data-style="${overlay.style}"]`);
+                    if (activeBtn) {
+                        activeBtn.classList.add('active');
+                    }
+                }
+            }
+        }
+    }
+    
+    showTextContextMenu(e, overlay, element) {
+        // Remove any existing context menu
+        let contextMenu = document.getElementById('textContextMenu');
+        if (contextMenu) {
+            document.body.removeChild(contextMenu);
+        }
+        
+        // Create new context menu
+        contextMenu = document.createElement('div');
+        contextMenu.id = 'textContextMenu';
+        contextMenu.className = 'text-context-menu';
+        
+        // Add menu items
+        contextMenu.innerHTML = `
+            <div class="menu-item" data-action="edit">Edit Text</div>
+            <div class="menu-item" data-action="bring-front">Bring to Front</div>
+            <div class="menu-item" data-action="send-back">Send to Back</div>
+            <div class="menu-item" data-action="duplicate">Duplicate</div>
+            <div class="menu-item delete" data-action="delete">Delete</div>
+        `;
+        
+        // Position menu at cursor
+        contextMenu.style.left = `${e.clientX}px`;
+        contextMenu.style.top = `${e.clientY}px`;
+        
+        // Add to document
+        document.body.appendChild(contextMenu);
+        
+        // Add click handlers
+        contextMenu.querySelectorAll('.menu-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = item.dataset.action;
+                
+                switch(action) {
+                    case 'edit':
+                        this.editTextOverlayInline(overlay, element);
+                        break;
+                    case 'bring-front':
+                        element.style.zIndex = '10';
+                        // Reorder in array to render last (on top)
+                        const idx = this.textOverlays.findIndex(o => o.id === overlay.id);
+                        if (idx !== -1) {
+                            this.textOverlays.push(this.textOverlays.splice(idx, 1)[0]);
+                        }
+                        break;
+                    case 'send-back':
+                        element.style.zIndex = '1';
+                        // Reorder in array to render first (on bottom)
+                        const idx2 = this.textOverlays.findIndex(o => o.id === overlay.id);
+                        if (idx2 !== -1) {
+                            this.textOverlays.unshift(this.textOverlays.splice(idx2, 1)[0]);
+                        }
+                        break;
+                    case 'duplicate':
+                        const newOverlay = {...overlay, id: Date.now()};
+                        newOverlay.x += 20;
+                        newOverlay.y += 20;
+                        this.textOverlays.push(newOverlay);
+                        this.createTextOverlayElement(newOverlay);
+                        break;
+                    case 'delete':
+                        this.removeTextOverlay(overlay.id);
+                        break;
+                }
+                
+                // Hide menu
+                contextMenu.style.display = 'none';
+                
+                // Redraw
+                this.drawCurrentFrame();
+            });
+        });
+        
+        // Close menu when clicking outside
+        setTimeout(() => {
+            document.addEventListener('click', function closeMenu(e) {
+                if (!contextMenu.contains(e.target)) {
+                    contextMenu.style.display = 'none';
+                    document.removeEventListener('click', closeMenu);
+                }
+            });
+        }, 0);
+    }
 
     editTextOverlayInline(overlay, element) {
-        // Create an input field positioned over the overlay
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.value = overlay.text;
-        input.style.cssText = `
+        // Instagram-like editing - create a styled contenteditable div for richer text entry
+        const textEditor = document.createElement('div');
+        textEditor.contentEditable = true;
+        textEditor.className = 'instagram-text-editor';
+        textEditor.textContent = overlay.text;
+        
+        // Instagram-like editor styles
+        textEditor.style.cssText = `
             position: absolute;
-            left: ${element.style.left};
-            top: ${element.style.top};
-            width: ${element.style.width};
-            height: ${element.style.height};
-            font-size: ${Math.max(14, overlay.fontSize * 0.6)}px;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            min-width: ${Math.max(200, parseInt(element.style.width) * 1.2)}px;
+            padding: 12px 16px;
+            font-size: ${overlay.fontSize}px;
             font-family: ${overlay.fontFamily};
             font-weight: ${overlay.bold ? 'bold' : 'normal'};
             color: ${overlay.color};
-            background: rgba(0,0,0,0.8);
-            border: 2px solid ${overlay.color};
-            border-radius: 4px;
+            background: rgba(0,0,0,0.7);
             text-align: center;
-            z-index: 1000;
+            border: none;
             outline: none;
-            padding: 4px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 2000;
+            transition: all 0.2s ease;
         `;
 
+        // Create a toolbar for Instagram-like styling
+        const toolbar = document.createElement('div');
+        toolbar.className = 'instagram-editor-toolbar';
+        toolbar.innerHTML = `
+            <div class="toolbar-item color-picker">
+                <div class="color-option" data-color="#ffffff" style="background-color:#ffffff"></div>
+                <div class="color-option" data-color="#000000" style="background-color:#000000"></div>
+                <div class="color-option" data-color="#ff0000" style="background-color:#ff0000"></div>
+                <div class="color-option" data-color="#00ff00" style="background-color:#00ff00"></div>
+                <div class="color-option" data-color="#0000ff" style="background-color:#0000ff"></div>
+                <div class="color-option" data-color="#ffff00" style="background-color:#ffff00"></div>
+            </div>
+            <div class="toolbar-item style-picker">
+                <div class="style-option" data-style="normal">Normal</div>
+                <div class="style-option" data-style="gradient">Gradient</div>
+                <div class="style-option" data-style="neon">Neon</div>
+            </div>
+            <div class="toolbar-item font-picker">
+                <select class="font-select">
+                    <option value="Impact, Arial, sans-serif" ${overlay.fontFamily === 'Impact, Arial, sans-serif' ? 'selected' : ''}>Impact</option>
+                    <option value="Arial, sans-serif" ${overlay.fontFamily === 'Arial, sans-serif' ? 'selected' : ''}>Arial</option>
+                    <option value="Comic Sans MS, cursive" ${overlay.fontFamily === 'Comic Sans MS, cursive' ? 'selected' : ''}>Comic Sans</option>
+                    <option value="Courier New, monospace" ${overlay.fontFamily === 'Courier New, monospace' ? 'selected' : ''}>Courier</option>
+                </select>
+            </div>
+        `;
+        
         // Hide the original overlay element while editing
         element.style.display = 'none';
         
-        // Add input to the overlay container
-        document.getElementById('textOverlays').appendChild(input);
+        // Append elements to body
+        const editorContainer = document.createElement('div');
+        editorContainer.className = 'instagram-editor-container';
+        editorContainer.appendChild(textEditor);
+        editorContainer.appendChild(toolbar);
+        document.body.appendChild(editorContainer);
         
         // Focus and select all text
-        input.focus();
-        input.select();
+        textEditor.focus();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(textEditor);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        
+        // Event handlers for toolbar items
+        const colorOptions = toolbar.querySelectorAll('.color-option');
+        colorOptions.forEach(option => {
+            option.addEventListener('click', () => {
+                const color = option.dataset.color;
+                overlay.color = color;
+                textEditor.style.color = color;
+                
+                // Update active state
+                colorOptions.forEach(o => o.classList.remove('active'));
+                option.classList.add('active');
+            });
+            
+            // Set active class for current color
+            if (option.dataset.color === overlay.color) {
+                option.classList.add('active');
+            }
+        });
+        
+        const styleOptions = toolbar.querySelectorAll('.style-option');
+        styleOptions.forEach(option => {
+            option.addEventListener('click', () => {
+                const style = option.dataset.style;
+                overlay.style = style;
+                
+                // Update active state
+                styleOptions.forEach(o => o.classList.remove('active'));
+                option.classList.add('active');
+                
+                // Preview style in editor
+                textEditor.style.background = '';
+                textEditor.style.backgroundClip = '';
+                textEditor.style.webkitBackgroundClip = '';
+                textEditor.style.textShadow = '';
+                textEditor.style.color = overlay.color;
+                
+                if (style === 'gradient') {
+                    textEditor.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
+                    textEditor.style.backgroundClip = 'text';
+                    textEditor.style.webkitBackgroundClip = 'text';
+                    textEditor.style.color = 'transparent';
+                } else if (style === 'neon') {
+                    textEditor.style.textShadow = `0 0 5px ${overlay.color}, 0 0 10px ${overlay.color}, 0 0 15px ${overlay.color}`;
+                    textEditor.style.color = overlay.color;
+                }
+            });
+            
+            // Set active class for current style
+            if (option.dataset.style === overlay.style) {
+                option.classList.add('active');
+            }
+        });
+        
+        const fontSelect = toolbar.querySelector('.font-select');
+        if (fontSelect) {
+            fontSelect.addEventListener('change', () => {
+                overlay.fontFamily = fontSelect.value;
+                textEditor.style.fontFamily = fontSelect.value;
+            });
+        }
 
+        // Close editor and apply changes
         const finishEditing = () => {
-            const newText = input.value.trim();
-            if (newText && newText !== overlay.text) {
-                // Update the overlay text
+            const newText = textEditor.textContent.trim();
+            if (newText) {
                 overlay.text = newText;
-                // Redraw the current frame to show the change
-                this.drawCurrentFrame();
+                
+                // Update the overlay element
+                const textElement = element.querySelector('.overlay-text');
+                if (textElement) {
+                    textElement.textContent = newText;
+                }
             }
             
-            // Remove the input and show the overlay again
-            input.remove();
+            // Show the overlay again
             element.style.display = 'block';
+            document.body.removeChild(editorContainer);
+            this.drawCurrentFrame();
         };
 
-        // Save on Enter or when losing focus
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+        // Handle click outside to close
+        const handleOutsideClick = (e) => {
+            if (!editorContainer.contains(e.target)) {
+                finishEditing();
+                document.removeEventListener('click', handleOutsideClick);
+            }
+        };
+        
+        // Add small delay to prevent immediate closure
+        setTimeout(() => {
+            document.addEventListener('click', handleOutsideClick);
+        }, 100);
+        
+        // Handle Enter key to finish editing
+        textEditor.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
                 finishEditing();
             } else if (e.key === 'Escape') {
-                // Cancel editing - just remove input without saving
-                input.remove();
+                // Cancel editing
+                element.style.display = 'block';
+                document.body.removeChild(editorContainer);
                 element.style.display = 'block';
             }
         });
 
-        input.addEventListener('blur', finishEditing);
+            }
+        });
+    }
+    
+    makeRotatable(element, overlay, rotateHandle) {
+        rotateHandle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Mark element as selected
+            this.selectTextOverlay(element, overlay);
+
+            const rect = element.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            const startAngle = Math.atan2(
+                e.clientY - centerY,
+                e.clientX - centerX
+            ) * 180 / Math.PI;
+            
+            const startRotation = overlay.rotation || 0;
+
+            const onMouseMove = (e) => {
+                const angle = Math.atan2(
+                    e.clientY - centerY,
+                    e.clientX - centerX
+                ) * 180 / Math.PI;
+                
+                const newRotation = (startRotation + angle - startAngle) % 360;
+                
+                overlay.rotation = newRotation;
+                element.style.transform = `rotate(${newRotation}deg)`;
+                this.drawCurrentFrame();
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
     }
 
     removeTextOverlay(id) {
