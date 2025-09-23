@@ -1062,7 +1062,7 @@ class GifMemeGenerator {
         
         this.ctx.strokeStyle = overlay.strokeColor || '#000000';
         this.ctx.lineWidth = overlay.strokeWidth || 2;
-        this.ctx.textAlign = overlay.alignment || 'center';
+    this.ctx.textAlign = overlay.alignment || overlay.align || 'center';
         this.ctx.textBaseline = 'middle';
         
         // Apply opacity if specified
@@ -1152,6 +1152,7 @@ class GifMemeGenerator {
         const overlayElement = document.createElement('div');
         overlayElement.className = 'text-overlay';
         overlayElement.setAttribute('data-id', overlay.id);
+    overlayElement.style.overflow = 'hidden';
 
         // Create visible text element (Instagram style)
         const textElement = document.createElement('div');
@@ -1164,13 +1165,20 @@ class GifMemeGenerator {
         
         // Apply Instagram-like styling
         const bold = overlay.bold ? 'bold ' : '';
-        textElement.style.fontSize = `${overlay.fontSize}px`;
-        textElement.style.fontFamily = overlay.fontFamily;
-        textElement.style.fontWeight = overlay.bold ? 'bold' : 'normal';
-        textElement.style.color = overlay.color;
-        textElement.style.textAlign = overlay.align || 'center';
-        textElement.style.opacity = overlay.opacity || 1;
-        textElement.style.padding = '8px';
+    textElement.style.fontSize = `${overlay.fontSize}px`;
+    textElement.style.fontFamily = overlay.fontFamily;
+    textElement.style.fontWeight = overlay.bold ? 'bold' : 'normal';
+    textElement.style.color = overlay.color;
+    textElement.style.textAlign = overlay.align || 'center';
+    textElement.style.opacity = overlay.opacity || 1;
+    textElement.style.padding = '8px';
+    textElement.style.width = '100%';
+    textElement.style.height = '100%';
+    textElement.style.display = 'flex';
+    textElement.style.alignItems = 'center';
+    textElement.style.justifyContent = 'center';
+    textElement.style.whiteSpace = 'normal';
+    textElement.style.wordBreak = 'break-word';
         
         // Apply background if enabled
         if (overlay.hasBg) {
@@ -1205,9 +1213,10 @@ class GifMemeGenerator {
         measureCtx.font = `${bold}${overlay.fontSize}px ${overlay.fontFamily}`;
         const metrics = measureCtx.measureText(overlay.text);
         // More generous padding for Instagram-style
-        const pad = Math.max(10, Math.round(overlay.fontSize * 0.25));
+    // Tighter padding so box hugs text better
+    const pad = Math.max(6, Math.round(overlay.fontSize * 0.15));
         const boxW = Math.ceil(metrics.width) + pad * 2;
-        const boxH = Math.ceil(overlay.fontSize * 1.5) + pad * 2;
+    const boxH = Math.ceil(overlay.fontSize * 1.25) + pad * 2;
         measureCtx.restore();
 
         // Position box centered at overlay.x/y within the canvas rect
@@ -1216,7 +1225,9 @@ class GifMemeGenerator {
         overlayElement.style.width = `${boxW}px`;
         overlayElement.style.height = `${boxH}px`;
         overlayElement.style.left = `${crect.left + (overlay.x - boxW / 2)}px`;
-        overlayElement.style.top = `${crect.top + (overlay.y - boxH / 2)}px`;
+    overlayElement.style.top = `${crect.top + (overlay.y - boxH / 2)}px`;
+    overlay.boxWidth = boxW;
+    overlay.boxHeight = boxH;
         
         // Apply rotation if specified
         if (overlay.rotation) {
@@ -1250,6 +1261,8 @@ class GifMemeGenerator {
         overlayElement.appendChild(styleControls);
 
         document.getElementById('textOverlays').appendChild(overlayElement);
+    // Ensure initial fit inside box
+    this.fitTextToBox(overlayElement, overlay);
     }    addResizeHandles(element) {
         const handles = ['nw-resize', 'ne-resize', 'sw-resize', 'se-resize'];
         handles.forEach(handle => {
@@ -1447,6 +1460,7 @@ class GifMemeGenerator {
                 const startLeft = parseInt(element.style.left);
                 const startTop = parseInt(element.style.top);
                 const startFontSize = overlay.fontSize;
+                const startStrokeWidth = overlay.strokeWidth || 0;
                 
                 const handleClass = handle.className.split(' ')[1];
                 
@@ -1489,10 +1503,31 @@ class GifMemeGenerator {
                     element.style.left = newLeft + 'px';
                     element.style.top = newTop + 'px';
                     
-                    // Calculate new font size based on width change
-                    const scaleFactor = newWidth / startWidth;
+                    // Calculate uniform scale factor based on BOTH width & height change (feel more natural)
+                    const scaleFactor = Math.min(newWidth / startWidth, newHeight / startHeight);
                     const newFontSize = Math.max(8, Math.min(72, Math.round(startFontSize * scaleFactor)));
                     overlay.fontSize = newFontSize;
+                    // Scale stroke width proportionally (cap reasonable range)
+                    overlay.strokeWidth = Math.max(0, Math.min(12, Math.round(startStrokeWidth * scaleFactor)));
+                    // Update DOM text element immediately (since preview canvas no longer paints overlays)
+                    const textEl = element.querySelector('.overlay-text');
+                    if (textEl) {
+                        textEl.style.fontSize = newFontSize + 'px';
+                        // Recreate stroke via text-shadow if not gradient style
+                        if (overlay.style === 'gradient') {
+                            // gradient handled via background clip; no stroke
+                            textEl.style.textShadow = 'none';
+                        } else if (overlay.style === 'neon') {
+                            const c = overlay.color || '#ffffff';
+                            textEl.style.textShadow = `0 0 5px ${c}, 0 0 10px ${c}, 0 0 15px ${c}`;
+                        } else if (overlay.strokeWidth > 0) {
+                            const sw = overlay.strokeWidth;
+                            const sc = overlay.strokeColor || '#000000';
+                            textEl.style.textShadow = `-${sw}px -${sw}px 0 ${sc}, ${sw}px -${sw}px 0 ${sc}, -${sw}px ${sw}px 0 ${sc}, ${sw}px ${sw}px 0 ${sc}`;
+                        } else {
+                            textEl.style.textShadow = '';
+                        }
+                    }
                     
                     // Update overlay position (center point)
                     const crect = this.getCanvasRectRelative();
@@ -1501,6 +1536,8 @@ class GifMemeGenerator {
                     
                     // Redraw with new font size
                     this.drawCurrentFrame();
+                    // Enforce containment (shrink if overflow)
+                    this.fitTextToBox(element, overlay);
                 };
                 
                 const onMouseUp = () => {
@@ -2424,6 +2461,44 @@ class GifMemeGenerator {
         if (this.renderOverlaysInPreview) {
             this.drawCurrentFrame();
         }
+        // After any style changes ensure text still fits
+        this.fitTextToBox(element, overlay);
+    }
+
+    // Adjust font size so text fits INSIDE the box (shrink) and also expands to fill extra space (grow)
+    fitTextToBox(element, overlay) {
+        const textElement = element.querySelector('.overlay-text');
+        if (!textElement) return;
+        let currentSize = overlay.fontSize || 28;
+        const maxWidth = element.clientWidth - 4;
+        const maxHeight = element.clientHeight - 4;
+        textElement.style.whiteSpace = 'normal';
+        textElement.style.wordBreak = 'break-word';
+
+        // 1. Shrink if overflowing
+        let iterations = 0;
+        while (iterations < 50 && currentSize > 6 && (textElement.scrollWidth > maxWidth || textElement.scrollHeight > maxHeight)) {
+            currentSize -= 1;
+            textElement.style.fontSize = currentSize + 'px';
+            iterations++;
+        }
+
+        // 2. Grow if there is still free space (user enlarged box) up to cap
+        if (iterations < 50) {
+            let growIters = 0;
+            while (growIters < 50 && currentSize < 180) {
+                textElement.style.fontSize = (currentSize + 1) + 'px';
+                if (textElement.scrollWidth > maxWidth || textElement.scrollHeight > maxHeight) {
+                    // revert last growth
+                    textElement.style.fontSize = currentSize + 'px';
+                    break;
+                }
+                currentSize += 1;
+                growIters++;
+            }
+        }
+
+        overlay.fontSize = currentSize;
     }
     
     makeRotatable(element, overlay, rotateHandle) {
@@ -3239,18 +3314,18 @@ class GifMemeGenerator {
         ctx.fillStyle = overlay.color || '#ffffff';
         ctx.strokeStyle = overlay.strokeColor || '#000000';
         ctx.lineWidth = overlay.strokeWidth || 2;
-        ctx.textAlign = 'center';
+    ctx.textAlign = overlay.alignment || overlay.align || 'center';
         ctx.textBaseline = 'middle';
         
         // Use the animated Y position if available, otherwise use original
         const yPos = overlay.animatedY !== undefined ? overlay.animatedY : overlay.y;
         
-        // Draw stroke (outline) first
-        if (overlay.strokeWidth > 0) {
-            ctx.strokeText(overlay.text, overlay.x, yPos);
+        if (overlay.rotation) {
+            ctx.translate(overlay.x, yPos);
+            ctx.rotate(overlay.rotation * Math.PI / 180);
+            ctx.translate(-overlay.x, -yPos);
         }
-        
-        // Draw fill text on top
+        if (overlay.strokeWidth > 0) ctx.strokeText(overlay.text, overlay.x, yPos);
         ctx.fillText(overlay.text, overlay.x, yPos);
         
         ctx.restore();

@@ -587,19 +587,46 @@ button:hover {
     outline: none;
 }
 
+/* Rotation handle */
+.rotation-handle {
+    position: absolute;
+    top: -26px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 18px;
+    height: 18px;
+    background: #4CAF50;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    cursor: grab;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.35);
+    opacity: 0;
+    transition: opacity .2s ease, transform .2s ease;
+    z-index: 20;
+}
+
+.text-overlay.selected .rotation-handle, .text-overlay:hover .rotation-handle {
+    opacity: 1;
+}
+
+.rotation-handle:active {
+    cursor: grabbing;
+    transform: translateX(-50%) scale(1.1);
+}
+
 /* Resize handles */
 .resize-handle {
     position: absolute;
     background: #4CAF50;
     border: 2px solid #fff;
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     pointer-events: auto;
     opacity: 0;
-    transition: opacity 0.2s ease;
+    transition: opacity 0.18s ease, transform 0.18s ease;
     z-index: 15;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.35);
 }
 
 .text-overlay.selected .resize-handle {
@@ -616,21 +643,12 @@ button:hover {
     cursor: nw-resize;
 }
 
-.resize-handle.ne-resize {
-    top: -6px;
-    right: -6px;
-    cursor: ne-resize;
-}
+.resize-handle.nw-resize { top: -7px; left: -7px; cursor: nw-resize; }
+.resize-handle.ne-resize { top: -7px; right: -7px; cursor: ne-resize; }
+.resize-handle.sw-resize { bottom: -7px; left: -7px; cursor: sw-resize; }
+.resize-handle:hover { transform: scale(1.1); }
 
-.resize-handle.sw-resize {
-    bottom: -6px;
-    left: -6px;
-    cursor: sw-resize;
-}
-
-/* Rainbow glow effect for Messenger button */
 .rainbow-glow-btn {
-    position: relative;
     background: linear-gradient(45deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3, #ff0000);
     background-size: 400% 400%;
     color: white !important;
