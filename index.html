@@ -93,8 +93,8 @@
 
             <!-- Editor Section -->
             <section class="editor-section" id="editorSection" style="display: none;">
-                <div class="editor-container">
-                    <div class="canvas-container">
+                <div class="editor-container minimal">
+                    <div class="canvas-container large">
                         <canvas id="gifCanvas"></canvas>
                         <div id="textOverlays"></div>
                         <button id="mobileAddTextBtn" class="add-text-button">Aa</button>
@@ -102,107 +102,14 @@
                             <i class="fas fa-trash-alt"></i>
                         </div>
                     </div>
-                    
-                    <div class="controls">
-                        <h3>Text Controls</h3>
-                        
-                        <div class="control-group">
-                            <label for="textInput">Text:</label>
-                            <div class="text-input-container">
-                                <input type="text" id="textInput" placeholder="Enter your text" />
-                                <button id="emojiBtn" class="emoji-btn" title="Add Emoji">😀</button>
-                            </div>
-                            <div id="emojiPicker" class="emoji-picker" style="display: none;">
-                                <div class="emoji-categories">
-                                    <button class="emoji-category active" data-category="smileys">😀</button>
-                                    <button class="emoji-category" data-category="animals">🐶</button>
-                                    <button class="emoji-category" data-category="food">🍎</button>
-                                    <button class="emoji-category" data-category="activities">⚽</button>
-                                    <button class="emoji-category" data-category="travel">🚗</button>
-                                    <button class="emoji-category" data-category="objects">💡</button>
-                                    <button class="emoji-category" data-category="symbols">❤️</button>
-                                    <button class="emoji-category" data-category="flags">🏳️</button>
-                                </div>
-                                <div class="emoji-grid" id="emojiGrid">
-                                    <!-- Emojis will be populated here -->
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="control-row">
-                            <div class="control-group">
-                                <label for="fontSize">Size:</label>
-                                <input type="range" id="fontSize" min="12" max="72" value="24" />
-                                <span id="fontSizeValue">24px</span>
-                            </div>
-                            
-                            <div class="control-group">
-                                <label for="textColor">Color:</label>
-                                <input type="color" id="textColor" value="#ffffff" />
-                            </div>
-                        </div>
-                        
-                        <div class="control-row">
-                            <div class="control-group">
-                                <label for="fontFamily">Font:</label>
-                                <select id="fontFamily">
-                                    <option value="Arial, sans-serif">Arial</option>
-                                    <option value="Impact, Charcoal, sans-serif">Impact</option>
-                                    <option value="Times New Roman, serif">Times New Roman</option>
-                                    <option value="Courier New, monospace">Courier New</option>
-                                    <option value="Helvetica, sans-serif">Helvetica</option>
-                                </select>
-                            </div>
-                            
-                            <div class="control-group">
-                                <label>
-                                    <input type="checkbox" id="boldText" />
-                                    Bold
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <div class="control-row">
-                            <div class="control-group">
-                                <label for="strokeWidth">Outline:</label>
-                                <input type="range" id="strokeWidth" min="0" max="8" value="2" />
-                                <span id="strokeWidthValue">2px</span>
-                            </div>
-                            
-                            <div class="control-group">
-                                <label for="strokeColor">Outline Color:</label>
-                                <input type="color" id="strokeColor" value="#000000" />
-                            </div>
-                                <div class="control-group">
-                                    <label for="qualityPreset">Quality / Size:</label>
-                                    <select id="qualityPreset">
-                                        <option value="balanced" selected>Balanced (default)</option>
-                                        <option value="high">High Quality (larger)</option>
-                                        <option value="economy">Economy (smallest)</option>
-                                    </select>
-                                </div>
-                                <div class="control-group">
-                                    <label for="frameSmoothing">Frame Smoothing:</label>
-                                    <select id="frameSmoothing">
-                                        <option value="none" selected>None (original)</option>
-                                        <option value="interpolate">Interpolate (add frames)</option>
-                                        <option value="blend">Blend transitions</option>
-                                    </select>
-                                </div>
-                        </div>
-                        
-                        <div class="button-group">
-                            <button id="addTextBtn">Add Text</button>
-                            <button id="clearTextBtn">Clear All Text</button>
-                            <button id="quickGifBtn">Quick Static Image</button>
-                            <button id="compatGifBtn" class="rainbow-glow-btn" title="Optimized for Facebook/Messenger">Create GIF for Messenger</button>
-                        </div>
-                        
-                        <div class="playback-controls">
-                            <button id="playPauseBtn">⏸️ Pause</button>
-                            <button id="prevFrameBtn">⏮️ Prev</button>
-                            <button id="nextFrameBtn">⏭️ Next</button>
-                        </div>
+                    <div class="actions-bar">
+                        <button id="addTextBtn" class="primary-action">Create Text</button>
+                        <button id="clearTextBtn">Clear All Text</button>
+                        <button id="quickGifBtn">Quick Static Image</button>
+                        <button id="compatGifBtn" class="rainbow-glow-btn" title="Optimized for Facebook/Messenger">Create GIF for Messenger</button>
+                        <button id="playPauseBtn">⏸️ Pause</button>
+                        <button id="prevFrameBtn">⏮️ Prev</button>
+                        <button id="nextFrameBtn">⏭️ Next</button>
                     </div>
                 </div>
             </section>

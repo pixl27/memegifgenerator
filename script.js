@@ -22,6 +22,7 @@ class GifMemeGenerator {
         this.searchState = { query: '', pos: null, prevStack: [], page: 1, lastNextPos: null, limit: 20 };
         this.initialized = false;
         this.eventHandlers = {}; // Track event handlers for cleanup
+    this.renderOverlaysInPreview = false; // avoid double render (DOM + canvas)
         
         // Initialize lock variables to prevent duplicate operations
         this._isAddingText = false;
@@ -439,57 +440,10 @@ class GifMemeGenerator {
         this.addSafeEventListener('prevPageBtn', 'click', () => this.prevSearchPage());
         this.addSafeEventListener('nextPageBtn', 'click', () => this.nextSearchPage());
 
-        // Text controls (for desktop UI)
-        // Bind addTextOverlay method directly to avoid duplicate handlers
-        this.handleAddText = this.addTextOverlay.bind(this);
-        this.addSafeEventListener('addTextBtn', 'click', this.handleAddText, 'add-text-btn-click');
-        
-        this.addSafeEventListener('clearTextBtn', 'click', () => this.clearAllText());
-        
-        // Create a bound handler for the enter key
-        this.handleTextInputEnter = (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault(); // Prevent form submission
-                // Use the same bound method as the buttons
-                if (this.handleAddText) {
-                    this.handleAddText();
-                } else {
-                    console.warn('handleAddText not defined yet, falling back to direct call');
-                    this.addTextOverlay();
-                }
-            }
-        };
-        this.addSafeEventListener('textInput', 'keypress', this.handleTextInputEnter, 'text-input-enter');
-
-        // Font controls
-        this.addSafeEventListener('fontSize', 'input', (e) => {
-            document.getElementById('fontSizeValue').textContent = e.target.value + 'px';
-        });
-        
-        this.addSafeEventListener('strokeWidth', 'input', (e) => {
-            document.getElementById('strokeWidthValue').textContent = e.target.value + 'px';
-        });
-        
-        // Emoji picker setup
-        setTimeout(() => {
-            this.setupEmojiPicker();
-            this.testEmojiPicker();
-        }, 100);
-
-        // Emoji picker (setup after DOM is ready)
-        setTimeout(() => {
-            this.setupEmojiPicker();
-            this.testEmojiPicker();
-        }, 100);
-
-        // Font controls
-        document.getElementById('fontSize').addEventListener('input', (e) => {
-            document.getElementById('fontSizeValue').textContent = e.target.value + 'px';
-        });
-        
-        document.getElementById('strokeWidth').addEventListener('input', (e) => {
-            document.getElementById('strokeWidthValue').textContent = e.target.value + 'px';
-        });
+    // Minimal text actions only
+    this.handleAddText = this.addTextOverlay.bind(this);
+    this.addSafeEventListener('addTextBtn', 'click', this.handleAddText, 'add-text-btn-click');
+    this.addSafeEventListener('clearTextBtn', 'click', () => this.clearAllText());
 
         // Playback controls
         document.getElementById('playPauseBtn').addEventListener('click', () => this.togglePlayback());
@@ -1058,10 +1012,12 @@ class GifMemeGenerator {
             return;
         }
         
-        // Draw static text overlays on top of the original frame
-        this.textOverlays.forEach(overlay => {
-            this.drawText(overlay);
-        });
+        // Only draw overlays to canvas if preview flag enabled
+        if (this.renderOverlaysInPreview) {
+            this.textOverlays.forEach(overlay => {
+                this.drawText(overlay);
+            });
+        }
     }
 
     drawText(overlay) {
@@ -1137,25 +1093,13 @@ class GifMemeGenerator {
         // Set lock
         this._isAddingText = true;
             
-        const textInput = document.getElementById('textInput');
-        if (!textInput) {
-            console.error('Text input field not found');
-            this._isAddingText = false; // Release lock
-            return;
-        }
-        
-        let text = textInput.value.trim();
-        
-        if (!this.selectedGif) {
+    if (!this.selectedGif) {
             this.showMessage('Please select a GIF first', 'error');
             this._isAddingText = false; // Release lock
             return;
         }
-        
-        // If no text entered, use a placeholder that will be edited immediately
-        if (!text) {
-            text = "Tap to edit";
-        }
+    const text = 'Tap to edit';
+
 
         try {
             // Generate a unique ID based on timestamp and a random number
@@ -1168,12 +1112,12 @@ class GifMemeGenerator {
                 text: text,
                 x: this.canvas.width / 2,
                 y: this.canvas.height / 2,
-                fontSize: parseInt(document.getElementById('fontSize').value) || 24,
-                color: document.getElementById('textColor').value || '#ffffff',
-                fontFamily: document.getElementById('fontFamily').value || 'Arial, sans-serif',
-                bold: document.getElementById('boldText')?.checked || false,
-                strokeWidth: parseInt(document.getElementById('strokeWidth').value) || 2,
-                strokeColor: document.getElementById('strokeColor').value || '#000000',
+                fontSize: 28,
+                color: '#ffffff',
+                fontFamily: 'Impact, Charcoal, sans-serif',
+                bold: true,
+                strokeWidth: 3,
+                strokeColor: '#000000',
                 rotation: 0,
                 style: 'normal',
                 align: 'center',
@@ -1183,16 +1127,15 @@ class GifMemeGenerator {
 
             this.textOverlays.push(overlay);
             this.createTextOverlayElement(overlay);
-            textInput.value = '';
+            // No input to clear in minimal UI
             
-            // Auto-select the new text for immediate editing (Instagram-like behavior)
+            // Optionally just select (do not open editor automatically)
             const lastAddedElement = document.querySelector(`.text-overlay[data-id="${overlay.id}"]`);
             if (lastAddedElement) {
-                this.selectTextOverlay(lastAddedElement, overlay);
-                this.editTextOverlayInline(overlay, lastAddedElement);
+                this.selectTextOverlay(lastAddedElement, overlay); // no inline edit call
             }
-            
-            this.showMessage('Text added! Type to edit.', 'success');
+
+            this.showMessage('Text added. Double click or tap to edit.', 'success');
         } catch (err) {
             console.error('Error adding text overlay:', err);
             this.showMessage('Error adding text. Please try again.', 'error');
@@ -2313,22 +2256,7 @@ class GifMemeGenerator {
                 }
                 
                 // Update the overlay element
-                const textElement = element.querySelector('.overlay-text');
-                if (textElement) {
-                    textElement.textContent = overlay.text;
-                    
-                    // Apply background if enabled
-                    if (overlay.hasBg) {
-                        textElement.classList.add('overlay-text-bg');
-                    } else {
-                        textElement.classList.remove('overlay-text-bg');
-                    }
-                    
-                    // Apply text alignment
-                    if (overlay.align) {
-                        textElement.style.textAlign = overlay.align;
-                    }
-                }
+                this.syncOverlayDom(element, overlay);
                 
                 // Show the overlay again
                 element.style.display = 'block';
@@ -2448,6 +2376,53 @@ class GifMemeGenerator {
             // Default to center
             textEditor.style.textAlign = 'center';
             overlay.align = 'center';
+        }
+    }
+
+    // Ensure DOM overlay reflects current model (text, colors, style, font, etc.)
+    syncOverlayDom(element, overlay) {
+        if (!element) return;
+        const textElement = element.querySelector('.overlay-text');
+        if (!textElement) return;
+        textElement.textContent = overlay.text;
+        // Font + weight
+        textElement.style.fontFamily = overlay.fontFamily || 'Impact, Charcoal, sans-serif';
+        textElement.style.fontWeight = overlay.bold ? 'bold' : 'normal';
+        textElement.style.fontSize = (overlay.fontSize || 28) + 'px';
+        // Alignment
+        textElement.style.textAlign = overlay.align || 'center';
+        // Background toggle
+        if (overlay.hasBg) {
+            textElement.classList.add('overlay-text-bg');
+        } else {
+            textElement.classList.remove('overlay-text-bg');
+        }
+        // Reset style-related properties
+        textElement.style.background = '';
+        textElement.style.backgroundClip = '';
+        textElement.style.webkitBackgroundClip = '';
+        textElement.style.color = overlay.color || '#ffffff';
+        textElement.style.textShadow = '';
+        // Stroke simulation via text-shadow if strokeWidth
+        if (overlay.strokeWidth && overlay.strokeWidth > 0 && overlay.style !== 'gradient') {
+            const sw = overlay.strokeWidth;
+            const sc = overlay.strokeColor || '#000000';
+            textElement.style.textShadow = `-${sw}px -${sw}px 0 ${sc}, ${sw}px -${sw}px 0 ${sc}, -${sw}px ${sw}px 0 ${sc}, ${sw}px ${sw}px 0 ${sc}`;
+        }
+        // Apply style variants
+        if (overlay.style === 'gradient') {
+            textElement.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
+            textElement.style.backgroundClip = 'text';
+            textElement.style.webkitBackgroundClip = 'text';
+            textElement.style.color = 'transparent';
+            textElement.style.textShadow = 'none';
+        } else if (overlay.style === 'neon') {
+            const c = overlay.color || '#ffffff';
+            textElement.style.textShadow = `0 0 5px ${c}, 0 0 10px ${c}, 0 0 15px ${c}`;
+        }
+        // Force canvas redraw if overlays are rendered there (optional flag)
+        if (this.renderOverlaysInPreview) {
+            this.drawCurrentFrame();
         }
     }
     

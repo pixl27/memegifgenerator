@@ -498,6 +498,38 @@ button:hover {
     gap: 30px;
 }
 
+/* Minimal layout variant */
+.editor-container.minimal {
+    grid-template-columns: 1fr;
+    gap: 16px;
+}
+
+.canvas-container.large {
+    min-height: 520px;
+    background: #111;
+}
+
+.actions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    background: rgba(255,255,255,0.08);
+    padding: 14px 16px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 14px;
+    backdrop-filter: blur(14px);
+}
+
+.actions-bar button {
+    flex: 1 1 180px;
+}
+
+@media (max-width: 680px) {
+  .actions-bar button { flex: 1 1 45%; }
+  .canvas-container.large { min-height: 420px; }
+}
+
 .canvas-container {
     position: relative;
     display: flex;
