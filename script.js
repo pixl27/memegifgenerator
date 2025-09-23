@@ -1557,6 +1557,7 @@ class GifMemeGenerator {
         let startX, startY, startLeftPx, startTopPx;
         let touchStartTime = 0;
         const overlayRoot = document.getElementById('textOverlays');
+    const deleteZone = document.getElementById('deleteZone');
 
         // Mouse events for desktop
         element.addEventListener('mousedown', (e) => {
@@ -1572,6 +1573,10 @@ class GifMemeGenerator {
             startLeftPx = parseFloat(element.style.left) || 0;
             startTopPx = parseFloat(element.style.top) || 0;
             e.preventDefault();
+            element.classList.add('dragging');
+            if (deleteZone) {
+                deleteZone.classList.add('visible');
+            }
         });
 
         const onMove = (e) => {
@@ -1601,11 +1606,28 @@ class GifMemeGenerator {
             // Update center-based overlay coordinates used for drawing
             overlay.x = (newLeft - crect.left) + halfW;
             overlay.y = (newTop - crect.top) + halfH;
+
+            // Delete zone hover feedback
+            if (deleteZone) {
+                const dzRect = deleteZone.getBoundingClientRect();
+                const elRect = element.getBoundingClientRect();
+                const overlap = !(elRect.right < dzRect.left || elRect.left > dzRect.right || elRect.bottom < dzRect.top || elRect.top > dzRect.bottom);
+                deleteZone.classList.toggle('drag-over', overlap);
+            }
         };
 
         const onUp = () => {
             if (!isDragging) return;
             isDragging = false;
+            element.classList.remove('dragging');
+            if (deleteZone) {
+                // Perform delete if dropped over zone
+                if (deleteZone.classList.contains('drag-over')) {
+                    this.removeTextOverlay(overlay.id);
+                }
+                deleteZone.classList.remove('drag-over');
+                deleteZone.classList.remove('visible');
+            }
             this.drawCurrentFrame(); // Update the canvas
         };
 
