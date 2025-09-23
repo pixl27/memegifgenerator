@@ -777,6 +777,74 @@ button:hover {
 
 /* Mobile responsive positioning */
 @media (max-width: 768px) {
+    body, html {
+        overflow-x: hidden;
+    }
+    .editor-container.minimal {
+        flex-direction: column;
+        gap: 10px;
+    }
+    .canvas-container.large {
+        width: 100% !important;
+        max-width: 100%;
+        aspect-ratio: 1/1;
+        position: relative;
+    }
+    #gifCanvas {
+        width: 100% !important;
+        height: 100% !important;
+    }
+    .actions-bar {
+        position: sticky;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(15,15,30,0.55);
+        backdrop-filter: blur(18px) saturate(160%);
+        border: 1px solid rgba(255,255,255,0.12);
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding: 8px 10px;
+        gap: 8px;
+        z-index: 120;
+    }
+    .actions-bar button {
+        flex: 0 0 auto;
+        padding: 10px 14px;
+        font-size: 13px;
+        min-width: 90px;
+    }
+    /* Hide less-used desktop buttons on very small screens */
+    @media (max-width: 520px) {
+        #prevFrameBtn, #nextFrameBtn { display: none; }
+    }
+    @media (max-width: 440px) {
+        #playPauseBtn { display: none; }
+    }
+    .rotation-handle { top: -20px; }
+    .resize-handle { width: 14px; height: 14px; }
+    .text-overlay { min-width: 40px; min-height: 40px; }
+    .mobile-text-toolbar {
+        position: fixed;
+        bottom: 70px;
+        left: 50%;
+        transform: translateX(-50%) translateY(140%);
+        display: flex;
+        gap: 10px;
+        background: rgba(20,20,40,0.75);
+        backdrop-filter: blur(18px) saturate(180%);
+        padding: 10px 16px;
+        border-radius: 30px;
+        box-shadow: 0 10px 40px -8px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.12);
+        z-index: 140;
+        transition: transform .35s cubic-bezier(.4,0,.2,1), opacity .35s;
+        opacity: 0;
+    }
+    .mobile-text-toolbar.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .mobile-text-toolbar button { background: var(--glass-bg); border-radius: 50%; width: 44px; height: 44px; padding: 0; display:flex; align-items:center; justify-content:center; font-size:18px; }
+    .mobile-text-toolbar button:active { transform: scale(.9); }
     .emoji-picker {
         position: fixed;
         top: auto;

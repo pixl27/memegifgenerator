@@ -363,9 +363,44 @@ class GifMemeGenerator {
         this.setupMobileControls();
         this.setupEventListeners();
         this.setupOverlayDeselection();
+    this.setupMobileToolbar();
         
         // Mark as initialized
         this.initialized = true;
+    }
+
+    setupMobileToolbar() {
+        const toolbar = document.getElementById('mobileTextToolbar');
+        if (!toolbar) return;
+        toolbar.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            const act = btn.dataset.act;
+            const overlayId = toolbar.dataset.overlayId;
+            const overlay = this.textOverlays.find(o => o.id == overlayId);
+            const el = overlay ? document.querySelector(`.text-overlay[data-id="${overlay.id}"]`) : null;
+            if (!overlay || !el) return;
+            if (act === 'style') {
+                overlay.style = btn.dataset.style;
+                const textEl = el.querySelector('.overlay-text');
+                if (textEl) this.applyTextStyle(textEl, overlay.style, overlay.color);
+            } else if (act === 'bigger') {
+                overlay.fontSize = Math.min((overlay.fontSize||24) + 4, 180);
+                const textEl = el.querySelector('.overlay-text');
+                if (textEl) textEl.style.fontSize = overlay.fontSize + 'px';
+            } else if (act === 'smaller') {
+                overlay.fontSize = Math.max((overlay.fontSize||24) - 4, 8);
+                const textEl = el.querySelector('.overlay-text');
+                if (textEl) textEl.style.fontSize = overlay.fontSize + 'px';
+            } else if (act === 'rotate') {
+                overlay.rotation = ((overlay.rotation || 0) + 15) % 360;
+                el.style.transform = `rotate(${overlay.rotation}deg)`;
+            }
+            this.drawCurrentFrame();
+        });
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 768) toolbar.classList.remove('show');
+        });
     }
     
     setupMobileControls() {
@@ -1788,7 +1823,7 @@ class GifMemeGenerator {
         // Select this overlay
         element.classList.add('selected');
         
-        // Show style controls for this overlay
+    // Show style controls for this overlay
         const styleControls = element.querySelector('.style-controls');
         if (styleControls) {
             // Only display controls automatically on desktop
@@ -1825,6 +1860,13 @@ class GifMemeGenerator {
                 if (overlay.style) {
                     const activeBtn = styleControls.querySelector(`.style-btn[data-style="${overlay.style}"]`);
                     if (activeBtn) {
+
+                    // Mobile floating toolbar
+                    const mbar = document.getElementById('mobileTextToolbar');
+                    if (mbar && window.innerWidth <= 768) {
+                        mbar.classList.add('show');
+                        mbar.dataset.overlayId = overlay.id;
+                    }
                         activeBtn.classList.add('active');
                     }
                 }
