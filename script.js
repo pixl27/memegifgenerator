@@ -321,6 +321,34 @@ class GifMemeGenerator {
         this.loadApiKey();
         this.setupCanvas();
         this.setupOverlayDeselection();
+        this.setupMobileControls();
+        
+        // Check if we're on a mobile device
+        this.isMobileDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    }
+    
+    setupMobileControls() {
+        // Setup "Aa" button for adding text (Instagram style)
+        const addTextButton = document.getElementById('addTextBtn');
+        if (addTextButton) {
+            addTextButton.addEventListener('click', (e) => {
+                if (e.target === addTextButton) { // Only if direct click on button (not delegation)
+                    e.preventDefault();
+                    this.addTextOverlay();
+                }
+            });
+            
+            // Prevent touchmove on the button to avoid page scrolling when touching it
+            addTextButton.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+            });
+        }
+        
+        // Setup delete zone
+        const deleteZone = document.getElementById('deleteZone');
+        if (deleteZone) {
+            deleteZone.classList.remove('visible');
+        }
     }
 
     setupEventListeners() {
@@ -1051,15 +1079,24 @@ class GifMemeGenerator {
         textElement.className = 'overlay-text';
         textElement.textContent = overlay.text;
         
+        // Initialize properties if not set
+        overlay.align = overlay.align || 'center';
+        overlay.hasBg = overlay.hasBg || false;
+        
         // Apply Instagram-like styling
         const bold = overlay.bold ? 'bold ' : '';
         textElement.style.fontSize = `${overlay.fontSize}px`;
         textElement.style.fontFamily = overlay.fontFamily;
         textElement.style.fontWeight = overlay.bold ? 'bold' : 'normal';
         textElement.style.color = overlay.color;
-        textElement.style.textAlign = overlay.alignment || 'center';
+        textElement.style.textAlign = overlay.align || 'center';
         textElement.style.opacity = overlay.opacity || 1;
         textElement.style.padding = '8px';
+        
+        // Apply background if enabled
+        if (overlay.hasBg) {
+            textElement.classList.add('overlay-text-bg');
+        }
         
         // Apply text shadow/stroke
         if (overlay.strokeWidth > 0) {
@@ -1119,6 +1156,9 @@ class GifMemeGenerator {
         this.makeDraggable(overlayElement, overlay, boxW, boxH);
         this.makeResizable(overlayElement, overlay);
         this.makeRotatable(overlayElement, overlay, rotationHandle);
+        
+        // Add mobile touch gestures
+        this.addMobileGestures(overlayElement, overlay);
 
         // Add style controls (only visible when selected)
         const styleControls = document.createElement('div');
@@ -1132,17 +1172,183 @@ class GifMemeGenerator {
 
         document.getElementById('textOverlays').appendChild(overlayElement);
     }    addResizeHandles(element) {
-        console.log('Adding resize handles...');
         const handles = ['nw-resize', 'ne-resize', 'sw-resize', 'se-resize'];
         handles.forEach(handle => {
             const resizeHandle = document.createElement('div');
             resizeHandle.className = `resize-handle ${handle}`;
             resizeHandle.style.pointerEvents = 'auto';
-            resizeHandle.style.display = 'block';
             element.appendChild(resizeHandle);
-            console.log('Added resize handle:', handle);
         });
-        console.log('All resize handles added, element children:', element.children.length);
+    }
+    
+    addMobileGestures(element, overlay) {
+        const textElement = element.querySelector('.overlay-text');
+        if (!textElement) return;
+        
+        // Variables for touch handling
+        let initialTouchDistance = 0;
+        let initialFontSize = overlay.fontSize;
+        let lastTouchRotation = 0;
+        let initialRotation = overlay.rotation || 0;
+        let touchStartTime = 0;
+        
+        // Double tap to edit
+        element.addEventListener('touchstart', (e) => {
+            const now = new Date().getTime();
+            const timeSince = now - touchStartTime;
+            
+            if (timeSince < 300 && timeSince > 0) {
+                // Double tap detected
+                e.preventDefault();
+                this.selectTextOverlay(element, overlay);
+                this.editTextOverlayInline(overlay, element);
+            }
+            
+            touchStartTime = now;
+        });
+        
+        // Long press for context menu
+        let longPressTimer;
+        element.addEventListener('touchstart', (e) => {
+            longPressTimer = setTimeout(() => {
+                e.preventDefault();
+                this.showMobileContextMenu(overlay, element);
+            }, 600);
+        });
+        
+        element.addEventListener('touchend', () => {
+            clearTimeout(longPressTimer);
+        });
+        
+        element.addEventListener('touchmove', () => {
+            clearTimeout(longPressTimer);
+        });
+        
+        // Handle multi-touch gestures (pinch to zoom, rotate)
+        element.addEventListener('touchstart', (e) => {
+            if (e.touches.length >= 2) {
+                e.preventDefault();
+                
+                // Calculate initial distance between two touch points (for pinch zoom)
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                initialTouchDistance = Math.hypot(
+                    touch2.clientX - touch1.clientX,
+                    touch2.clientY - touch1.clientY
+                );
+                initialFontSize = overlay.fontSize;
+                
+                // Calculate initial rotation angle
+                lastTouchRotation = Math.atan2(
+                    touch2.clientY - touch1.clientY,
+                    touch2.clientX - touch1.clientX
+                ) * 180 / Math.PI;
+                initialRotation = overlay.rotation || 0;
+            }
+        });
+        
+        element.addEventListener('touchmove', (e) => {
+            if (e.touches.length >= 2) {
+                e.preventDefault();
+                this.selectTextOverlay(element, overlay);
+                
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                
+                // Handle pinch to zoom (font size)
+                const currentDistance = Math.hypot(
+                    touch2.clientX - touch1.clientX,
+                    touch2.clientY - touch1.clientY
+                );
+                
+                const scaleFactor = currentDistance / initialTouchDistance;
+                const newFontSize = Math.max(10, Math.min(100, Math.round(initialFontSize * scaleFactor)));
+                
+                if (Math.abs(newFontSize - overlay.fontSize) > 1) {
+                    overlay.fontSize = newFontSize;
+                    textElement.style.fontSize = `${newFontSize}px`;
+                }
+                
+                // Handle two-finger rotation
+                const currentRotation = Math.atan2(
+                    touch2.clientY - touch1.clientY,
+                    touch2.clientX - touch1.clientX
+                ) * 180 / Math.PI;
+                
+                const rotationDelta = currentRotation - lastTouchRotation;
+                const newRotation = (initialRotation + rotationDelta) % 360;
+                
+                if (Math.abs(rotationDelta) > 1) {
+                    overlay.rotation = newRotation;
+                    element.style.transform = `rotate(${newRotation}deg)`;
+                    lastTouchRotation = currentRotation;
+                    initialRotation = newRotation;
+                }
+            }
+        });
+        
+        // Handle drag to delete
+        let isDraggingToDelete = false;
+        
+        element.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 1 && element.classList.contains('selected')) {
+                const deleteZone = document.getElementById('deleteZone');
+                if (!deleteZone) return;
+                
+                const touch = e.touches[0];
+                const deleteRect = deleteZone.getBoundingClientRect();
+                const touchY = touch.clientY;
+                
+                // Check if the touch is near the bottom of the screen
+                if (touchY > window.innerHeight - 100) {
+                    // Show delete zone
+                    deleteZone.classList.add('visible');
+                    isDraggingToDelete = true;
+                    
+                    // Check if touch is over delete zone
+                    if (touch.clientX >= deleteRect.left && 
+                        touch.clientX <= deleteRect.right &&
+                        touchY >= deleteRect.top &&
+                        touchY <= deleteRect.bottom) {
+                        
+                        deleteZone.style.transform = 'translateX(-50%) scale(1.2)';
+                    } else {
+                        deleteZone.style.transform = 'translateX(-50%) scale(1)';
+                    }
+                } else if (isDraggingToDelete) {
+                    deleteZone.classList.remove('visible');
+                    deleteZone.style.transform = 'translateX(-50%) scale(1)';
+                    isDraggingToDelete = false;
+                }
+            }
+        });
+        
+        element.addEventListener('touchend', (e) => {
+            if (isDraggingToDelete) {
+                const deleteZone = document.getElementById('deleteZone');
+                if (!deleteZone) return;
+                
+                // Check if last touch position was over delete zone
+                if (e.changedTouches.length > 0) {
+                    const touch = e.changedTouches[0];
+                    const deleteRect = deleteZone.getBoundingClientRect();
+                    
+                    if (touch.clientX >= deleteRect.left && 
+                        touch.clientX <= deleteRect.right &&
+                        touch.clientY >= deleteRect.top &&
+                        touch.clientY <= deleteRect.bottom) {
+                        
+                        // Delete the overlay
+                        this.removeTextOverlay(overlay.id);
+                    }
+                }
+                
+                // Hide delete zone
+                deleteZone.classList.remove('visible');
+                deleteZone.style.transform = 'translateX(-50%) scale(1)';
+                isDraggingToDelete = false;
+            }
+        });
     }
 
     makeResizable(element, overlay) {
@@ -1233,14 +1439,16 @@ class GifMemeGenerator {
     makeDraggable(element, overlay, boxW = 0, boxH = 0) {
         let isDragging = false;
         let startX, startY, startLeftPx, startTopPx;
+        let touchStartTime = 0;
         const overlayRoot = document.getElementById('textOverlays');
 
+        // Mouse events for desktop
         element.addEventListener('mousedown', (e) => {
             // Don't start dragging if clicking on a resize handle
-            if (e.target.classList.contains('resize-handle')) return;
+            if (e.target.classList.contains('resize-handle') || e.target.classList.contains('rotation-handle')) return;
             
             isDragging = true;
-            element.classList.add('selected');
+            this.selectTextOverlay(element, overlay);
             // Starting pointer position in viewport
             startX = e.clientX;
             startY = e.clientY;
@@ -1282,11 +1490,81 @@ class GifMemeGenerator {
         const onUp = () => {
             if (!isDragging) return;
             isDragging = false;
-            element.classList.remove('selected');
+            this.drawCurrentFrame(); // Update the canvas
         };
 
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
+        
+        // Touch events for mobile
+        element.addEventListener('touchstart', (e) => {
+            // Don't start dragging if touching a resize handle
+            if (e.target.classList.contains('resize-handle') || e.target.classList.contains('rotation-handle')) return;
+            
+            // Check for double tap
+            const now = new Date().getTime();
+            const timeSince = now - touchStartTime;
+            
+            if (timeSince < 300 && timeSince > 0) {
+                // Double tap detected
+                e.preventDefault();
+                this.editTextOverlayInline(overlay, element);
+                return;
+            }
+            
+            touchStartTime = now;
+            
+            if (e.touches.length === 1) {
+                isDragging = true;
+                this.selectTextOverlay(element, overlay);
+                
+                const touch = e.touches[0];
+                startX = touch.clientX;
+                startY = touch.clientY;
+                startLeftPx = parseFloat(element.style.left) || 0;
+                startTopPx = parseFloat(element.style.top) || 0;
+            }
+        });
+        
+        const onTouchMove = (e) => {
+            if (!isDragging || e.touches.length !== 1) return;
+            
+            const touch = e.touches[0];
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+
+            // New element box top-left in pixels
+            let newLeft = startLeftPx + dx;
+            let newTop = startTopPx + dy;
+
+            const halfW = (boxW || element.offsetWidth) / 2;
+            const halfH = (boxH || element.offsetHeight) / 2;
+            // Clamp to canvas bounds within overlay root
+            const crect = this.getCanvasRectRelative();
+            const minLeft = crect.left;
+            const minTop = crect.top;
+            const maxLeft = crect.left + crect.width - (halfW * 2);
+            const maxTop = crect.top + crect.height - (halfH * 2);
+            newLeft = Math.max(minLeft, Math.min(maxLeft, newLeft));
+            newTop = Math.max(minTop, Math.min(maxTop, newTop));
+
+            // Update element position
+            element.style.left = newLeft + 'px';
+            element.style.top = newTop + 'px';
+
+            // Update center-based overlay coordinates used for drawing
+            overlay.x = (newLeft - crect.left) + halfW;
+            overlay.y = (newTop - crect.top) + halfH;
+        };
+        
+        const onTouchEnd = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            this.drawCurrentFrame(); // Update the canvas
+        };
+        
+        document.addEventListener('touchmove', onTouchMove, { passive: false });
+        document.addEventListener('touchend', onTouchEnd);
 
         // Double-click to edit text inline
         element.addEventListener('dblclick', (e) => {
@@ -1354,7 +1632,9 @@ class GifMemeGenerator {
         // Show style controls for this overlay
         const styleControls = element.querySelector('.style-controls');
         if (styleControls) {
-            styleControls.style.display = 'flex';
+            // Only display controls automatically on desktop
+            const displayStyle = this.isMobileDevice ? 'none' : 'flex';
+            styleControls.style.display = displayStyle;
             
             // Add style button handlers if not already added
             if (!styleControls.dataset.initialized) {
@@ -1373,22 +1653,8 @@ class GifMemeGenerator {
                         // Update the text display
                         const textElement = element.querySelector('.overlay-text');
                         if (textElement) {
-                            // Reset styles
-                            textElement.style.background = '';
-                            textElement.style.backgroundClip = '';
-                            textElement.style.webkitBackgroundClip = '';
-                            textElement.style.textShadow = '';
-                            textElement.style.color = overlay.color;
-                            
-                            // Apply new style
-                            if (style === 'gradient') {
-                                textElement.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
-                                textElement.style.backgroundClip = 'text';
-                                textElement.style.webkitBackgroundClip = 'text';
-                                textElement.style.color = 'transparent';
-                            } else if (style === 'neon') {
-                                textElement.style.textShadow = `0 0 5px ${overlay.color}, 0 0 10px ${overlay.color}, 0 0 15px ${overlay.color}`;
-                            }
+                            // Apply the style
+                            this.applyTextStyle(textElement, style, overlay.color);
                         }
                         
                         // Redraw
@@ -1405,10 +1671,131 @@ class GifMemeGenerator {
                 }
             }
         }
+        
+        // Make resize handles visible on selection
+        const resizeHandles = element.querySelectorAll('.resize-handle');
+        resizeHandles.forEach(handle => {
+            handle.style.display = 'block';
+        });
+        
+        // Bring selected element to front
+        element.style.zIndex = '5';
+    }
+    
+    // Helper function to apply text styles (reusable)
+    applyTextStyle(element, style, color) {
+        // Reset styles first
+        element.style.background = '';
+        element.style.backgroundClip = '';
+        element.style.webkitBackgroundClip = '';
+        element.style.textShadow = '';
+        element.style.color = color;
+        
+        // Apply new style
+        if (style === 'gradient') {
+            element.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
+            element.style.backgroundClip = 'text';
+            element.style.webkitBackgroundClip = 'text';
+            element.style.color = 'transparent';
+        } else if (style === 'neon') {
+            element.style.textShadow = `0 0 5px ${color}, 0 0 10px ${color}, 0 0 15px ${color}`;
+        }
+    }
+    
+    showMobileContextMenu(overlay, element) {
+        // Use the bottom slide-up mobile context menu
+        const mobileMenu = document.getElementById('mobileContextMenu');
+        if (!mobileMenu) return;
+        
+        // Show the menu with animation
+        mobileMenu.classList.add('visible');
+        
+        // Add touch handlers
+        const menuItems = mobileMenu.querySelectorAll('.mobile-menu-item');
+        
+        // Remove any existing handlers first
+        menuItems.forEach(item => {
+            const newItem = item.cloneNode(true);
+            item.parentNode.replaceChild(newItem, item);
+        });
+        
+        // Add new handlers
+        mobileMenu.querySelectorAll('.mobile-menu-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = item.dataset.action;
+                
+                switch(action) {
+                    case 'edit':
+                        this.editTextOverlayInline(overlay, element);
+                        break;
+                    case 'style':
+                        // Show style controls
+                        const styleControls = element.querySelector('.style-controls');
+                        if (styleControls) {
+                            styleControls.style.display = 'flex';
+                        }
+                        break;
+                    case 'front':
+                        element.style.zIndex = '10';
+                        // Reorder in array to render last (on top)
+                        const idx = this.textOverlays.findIndex(o => o.id === overlay.id);
+                        if (idx !== -1) {
+                            this.textOverlays.push(this.textOverlays.splice(idx, 1)[0]);
+                        }
+                        break;
+                    case 'back':
+                        element.style.zIndex = '1';
+                        // Reorder in array to render first (on bottom)
+                        const idx2 = this.textOverlays.findIndex(o => o.id === overlay.id);
+                        if (idx2 !== -1) {
+                            this.textOverlays.unshift(this.textOverlays.splice(idx2, 1)[0]);
+                        }
+                        break;
+                    case 'duplicate':
+                        const newOverlay = {...overlay, id: Date.now()};
+                        newOverlay.x += 20;
+                        newOverlay.y += 20;
+                        this.textOverlays.push(newOverlay);
+                        this.createTextOverlayElement(newOverlay);
+                        break;
+                    case 'delete':
+                        this.removeTextOverlay(overlay.id);
+                        break;
+                }
+                
+                // Hide menu
+                mobileMenu.classList.remove('visible');
+                
+                // Redraw
+                this.drawCurrentFrame();
+            });
+        });
+        
+        // Close when clicking outside
+        const closeMenu = (e) => {
+            if (!mobileMenu.contains(e.target)) {
+                mobileMenu.classList.remove('visible');
+                document.removeEventListener('click', closeMenu);
+                document.removeEventListener('touchstart', closeMenu);
+            }
+        };
+        
+        // Small delay to prevent immediate close
+        setTimeout(() => {
+            document.addEventListener('click', closeMenu);
+            document.addEventListener('touchstart', closeMenu);
+        }, 100);
     }
     
     showTextContextMenu(e, overlay, element) {
-        // Remove any existing context menu
+        // On mobile devices, use the mobile context menu
+        if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+            this.showMobileContextMenu(overlay, element);
+            return;
+        }
+        
+        // Desktop context menu
         let contextMenu = document.getElementById('textContextMenu');
         if (contextMenu) {
             document.body.removeChild(contextMenu);
@@ -1505,7 +1892,7 @@ class GifMemeGenerator {
             left: 50%;
             top: 50%;
             transform: translate(-50%, -50%);
-            min-width: ${Math.max(200, parseInt(element.style.width) * 1.2)}px;
+            min-width: ${Math.max(200, parseInt(element.style.width || '200') * 1.2)}px;
             padding: 12px 16px;
             font-size: ${overlay.fontSize}px;
             font-family: ${overlay.fontFamily};
@@ -1520,32 +1907,95 @@ class GifMemeGenerator {
             z-index: 2000;
             transition: all 0.2s ease;
         `;
-
-        // Create a toolbar for Instagram-like styling
-        const toolbar = document.createElement('div');
-        toolbar.className = 'instagram-editor-toolbar';
-        toolbar.innerHTML = `
+        
+        // Create font toolbar for Instagram-like styling
+        const fontToolbar = document.createElement('div');
+        fontToolbar.className = 'instagram-editor-toolbar instagram-font-toolbar';
+        
+        // Define available fonts with preview
+        const fonts = [
+            { name: 'Classic', value: 'Arial, sans-serif' },
+            { name: 'Bold', value: 'Impact, Arial, sans-serif' },
+            { name: 'Modern', value: 'Helvetica, sans-serif' },
+            { name: 'Typewriter', value: 'Courier New, monospace' },
+            { name: 'Fancy', value: 'Comic Sans MS, cursive' }
+        ];
+        
+        // Create font options
+        const fontOptionsHTML = fonts.map(font => `
+            <div class="font-option ${overlay.fontFamily === font.value ? 'active' : ''}" data-font="${font.value}">
+                <div class="font-preview" style="font-family: ${font.value}">Aa</div>
+                <div class="font-name">${font.name}</div>
+            </div>
+        `).join('');
+        
+        fontToolbar.innerHTML = `
+            <div class="toolbar-item font-picker">
+                ${fontOptionsHTML}
+            </div>
+        `;
+        
+        // Create color toolbar
+        const colorToolbar = document.createElement('div');
+        colorToolbar.className = 'instagram-editor-toolbar instagram-color-toolbar';
+        
+        // Extended color palette for mobile
+        const colors = [
+            '#ffffff', '#000000', '#ff0080', '#ff8c00', '#ffed00', 
+            '#00ff80', '#00bfff', '#8000ff', '#ff0000', '#00ff00',
+            '#0000ff', '#ffff00', '#ff00ff', '#00ffff'
+        ];
+        
+        // Create color options
+        const colorOptionsHTML = colors.map(color => `
+            <div class="color-option ${overlay.color === color ? 'active' : ''}" 
+                data-color="${color}" style="background-color:${color}"></div>
+        `).join('');
+        
+        // Create style options
+        const styleOptionsList = [
+            { name: 'Normal', value: 'normal' },
+            { name: 'Gradient', value: 'gradient' },
+            { name: 'Neon', value: 'neon' }
+        ];
+        
+        const styleOptionsHTML = styleOptionsList.map(style => `
+            <div class="style-option ${overlay.style === style.value ? 'active' : ''}" 
+                data-style="${style.value}">${style.name}</div>
+        `).join('');
+        
+        // Create alignment options
+        const alignOptionsList = [
+            { name: '<i class="fas fa-align-left"></i>', value: 'left' },
+            { name: '<i class="fas fa-align-center"></i>', value: 'center' },
+            { name: '<i class="fas fa-align-right"></i>', value: 'right' }
+        ];
+        
+        const alignOptionsHTML = `
+            <div class="align-options">
+                ${alignOptionsList.map(align => `
+                    <div class="align-option ${overlay.align === align.value ? 'active' : ''}" 
+                        data-align="${align.value}">${align.name}</div>
+                `).join('')}
+            </div>
+        `;
+        
+        // Add text background toggle
+        const bgToggleHTML = `
+            <div class="text-bg-toggle ${overlay.hasBg ? 'active' : ''}" id="textBgToggle">
+                <i class="fas fa-font"></i>
+            </div>
+        `;
+        
+        colorToolbar.innerHTML = `
             <div class="toolbar-item color-picker">
-                <div class="color-option" data-color="#ffffff" style="background-color:#ffffff"></div>
-                <div class="color-option" data-color="#000000" style="background-color:#000000"></div>
-                <div class="color-option" data-color="#ff0000" style="background-color:#ff0000"></div>
-                <div class="color-option" data-color="#00ff00" style="background-color:#00ff00"></div>
-                <div class="color-option" data-color="#0000ff" style="background-color:#0000ff"></div>
-                <div class="color-option" data-color="#ffff00" style="background-color:#ffff00"></div>
+                ${colorOptionsHTML}
             </div>
             <div class="toolbar-item style-picker">
-                <div class="style-option" data-style="normal">Normal</div>
-                <div class="style-option" data-style="gradient">Gradient</div>
-                <div class="style-option" data-style="neon">Neon</div>
+                ${styleOptionsHTML}
             </div>
-            <div class="toolbar-item font-picker">
-                <select class="font-select">
-                    <option value="Impact, Arial, sans-serif" ${overlay.fontFamily === 'Impact, Arial, sans-serif' ? 'selected' : ''}>Impact</option>
-                    <option value="Arial, sans-serif" ${overlay.fontFamily === 'Arial, sans-serif' ? 'selected' : ''}>Arial</option>
-                    <option value="Comic Sans MS, cursive" ${overlay.fontFamily === 'Comic Sans MS, cursive' ? 'selected' : ''}>Comic Sans</option>
-                    <option value="Courier New, monospace" ${overlay.fontFamily === 'Courier New, monospace' ? 'selected' : ''}>Courier</option>
-                </select>
-            </div>
+            ${alignOptionsHTML}
+            ${bgToggleHTML}
         `;
         
         // Hide the original overlay element while editing
@@ -1555,8 +2005,14 @@ class GifMemeGenerator {
         const editorContainer = document.createElement('div');
         editorContainer.className = 'instagram-editor-container';
         editorContainer.appendChild(textEditor);
-        editorContainer.appendChild(toolbar);
+        editorContainer.appendChild(fontToolbar);
+        editorContainer.appendChild(colorToolbar);
         document.body.appendChild(editorContainer);
+        
+        // Show keyboard automatically on mobile
+        setTimeout(() => {
+            textEditor.focus();
+        }, 100);
         
         // Focus and select all text
         textEditor.focus();
@@ -1566,26 +2022,27 @@ class GifMemeGenerator {
         selection.removeAllRanges();
         selection.addRange(range);
         
-        // Event handlers for toolbar items
-        const colorOptions = toolbar.querySelectorAll('.color-option');
+        // Event handlers for color options
+        const colorOptions = colorToolbar.querySelectorAll('.color-option');
         colorOptions.forEach(option => {
             option.addEventListener('click', () => {
                 const color = option.dataset.color;
                 overlay.color = color;
-                textEditor.style.color = color;
+                
+                // Apply color based on current style
+                applyTextStyle(textEditor, overlay.style, color);
                 
                 // Update active state
                 colorOptions.forEach(o => o.classList.remove('active'));
                 option.classList.add('active');
+                
+                // Visual feedback for mobile
+                showTouchIndicator(option);
             });
-            
-            // Set active class for current color
-            if (option.dataset.color === overlay.color) {
-                option.classList.add('active');
-            }
         });
         
-        const styleOptions = toolbar.querySelectorAll('.style-option');
+        // Event handlers for style options
+        const styleOptions = colorToolbar.querySelectorAll('.style-option');
         styleOptions.forEach(option => {
             option.addEventListener('click', () => {
                 const style = option.dataset.style;
@@ -1595,37 +2052,103 @@ class GifMemeGenerator {
                 styleOptions.forEach(o => o.classList.remove('active'));
                 option.classList.add('active');
                 
-                // Preview style in editor
-                textEditor.style.background = '';
-                textEditor.style.backgroundClip = '';
-                textEditor.style.webkitBackgroundClip = '';
-                textEditor.style.textShadow = '';
-                textEditor.style.color = overlay.color;
+                // Apply the style
+                applyTextStyle(textEditor, style, overlay.color);
                 
-                if (style === 'gradient') {
-                    textEditor.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
-                    textEditor.style.backgroundClip = 'text';
-                    textEditor.style.webkitBackgroundClip = 'text';
-                    textEditor.style.color = 'transparent';
-                } else if (style === 'neon') {
-                    textEditor.style.textShadow = `0 0 5px ${overlay.color}, 0 0 10px ${overlay.color}, 0 0 15px ${overlay.color}`;
-                    textEditor.style.color = overlay.color;
-                }
+                // Visual feedback for mobile
+                showTouchIndicator(option);
             });
-            
-            // Set active class for current style
-            if (option.dataset.style === overlay.style) {
-                option.classList.add('active');
-            }
         });
         
-        const fontSelect = toolbar.querySelector('.font-select');
-        if (fontSelect) {
-            fontSelect.addEventListener('change', () => {
-                overlay.fontFamily = fontSelect.value;
-                textEditor.style.fontFamily = fontSelect.value;
+        // Event handlers for font options
+        const fontOptions = fontToolbar.querySelectorAll('.font-option');
+        fontOptions.forEach(option => {
+            option.addEventListener('click', () => {
+                const font = option.dataset.font;
+                overlay.fontFamily = font;
+                textEditor.style.fontFamily = font;
+                
+                // Update active state
+                fontOptions.forEach(o => o.classList.remove('active'));
+                option.classList.add('active');
+                
+                // Visual feedback for mobile
+                showTouchIndicator(option);
+            });
+        });
+        
+        // Event handlers for alignment options
+        const alignOptions = colorToolbar.querySelectorAll('.align-option');
+        alignOptions.forEach(option => {
+            option.addEventListener('click', () => {
+                const align = option.dataset.align;
+                overlay.align = align;
+                textEditor.style.textAlign = align;
+                
+                // Update active state
+                alignOptions.forEach(o => o.classList.remove('active'));
+                option.classList.add('active');
+                
+                // Visual feedback for mobile
+                showTouchIndicator(option);
+            });
+        });
+        
+        // Background toggle handler
+        const bgToggle = colorToolbar.querySelector('#textBgToggle');
+        if (bgToggle) {
+            bgToggle.addEventListener('click', () => {
+                overlay.hasBg = !overlay.hasBg;
+                
+                if (overlay.hasBg) {
+                    textEditor.classList.add('overlay-text-bg');
+                    bgToggle.classList.add('active');
+                } else {
+                    textEditor.classList.remove('overlay-text-bg');
+                    bgToggle.classList.remove('active');
+                }
+                
+                // Visual feedback for mobile
+                showTouchIndicator(bgToggle);
             });
         }
+        
+        // Helper function to apply text styles
+        const applyTextStyle = (element, style, color) => {
+            // Reset styles first
+            element.style.background = '';
+            element.style.backgroundClip = '';
+            element.style.webkitBackgroundClip = '';
+            element.style.textShadow = '';
+            element.style.color = color;
+            
+            // Apply new style
+            if (style === 'gradient') {
+                element.style.background = 'linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff)';
+                element.style.backgroundClip = 'text';
+                element.style.webkitBackgroundClip = 'text';
+                element.style.color = 'transparent';
+            } else if (style === 'neon') {
+                element.style.textShadow = `0 0 5px ${color}, 0 0 10px ${color}, 0 0 15px ${color}`;
+                element.style.color = color;
+            }
+        };
+        
+        // Visual touch feedback function
+        const showTouchIndicator = (element) => {
+            const touchIndicator = document.getElementById('touchIndicator');
+            if (!touchIndicator) return;
+            
+            const rect = element.getBoundingClientRect();
+            touchIndicator.style.left = `${rect.left + rect.width/2}px`;
+            touchIndicator.style.top = `${rect.top + rect.height/2}px`;
+            
+            touchIndicator.classList.add('active');
+            
+            setTimeout(() => {
+                touchIndicator.classList.remove('active');
+            }, 500);
+        };
 
         // Close editor and apply changes
         const finishEditing = () => {
@@ -1637,6 +2160,18 @@ class GifMemeGenerator {
                 const textElement = element.querySelector('.overlay-text');
                 if (textElement) {
                     textElement.textContent = newText;
+                    
+                    // Apply background if enabled
+                    if (overlay.hasBg) {
+                        textElement.classList.add('overlay-text-bg');
+                    } else {
+                        textElement.classList.remove('overlay-text-bg');
+                    }
+                    
+                    // Apply text alignment
+                    if (overlay.align) {
+                        textElement.style.textAlign = overlay.align;
+                    }
                 }
             }
             
@@ -1644,20 +2179,25 @@ class GifMemeGenerator {
             element.style.display = 'block';
             document.body.removeChild(editorContainer);
             this.drawCurrentFrame();
+            
+            // Make sure the element is selected after editing
+            this.selectTextOverlay(element, overlay);
         };
 
-        // Handle click outside to close
+        // Handle tap/click outside to close
         const handleOutsideClick = (e) => {
             if (!editorContainer.contains(e.target)) {
                 finishEditing();
                 document.removeEventListener('click', handleOutsideClick);
+                document.removeEventListener('touchend', handleOutsideClick);
             }
         };
         
         // Add small delay to prevent immediate closure
         setTimeout(() => {
             document.addEventListener('click', handleOutsideClick);
-        }, 100);
+            document.addEventListener('touchend', handleOutsideClick);
+        }, 300); // Slightly longer delay for mobile
         
         // Handle Enter key to finish editing
         textEditor.addEventListener('keydown', (e) => {
@@ -1671,9 +2211,25 @@ class GifMemeGenerator {
                 element.style.display = 'block';
             }
         });
-
-            }
-        });
+        
+        // Initial style application
+        if (overlay.style) {
+            applyTextStyle(textEditor, overlay.style, overlay.color);
+        }
+        
+        // Apply text background if enabled
+        if (overlay.hasBg) {
+            textEditor.classList.add('overlay-text-bg');
+        }
+        
+        // Apply text alignment
+        if (overlay.align) {
+            textEditor.style.textAlign = overlay.align;
+        } else {
+            // Default to center
+            textEditor.style.textAlign = 'center';
+            overlay.align = 'center';
+        }
     }
     
     makeRotatable(element, overlay, rotateHandle) {

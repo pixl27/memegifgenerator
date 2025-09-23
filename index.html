@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>GIF Meme Generator</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="instagram-styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/gif-frames@1.0.1/index.min.js"></script>
     <!-- Try CDNs for gifuct-js (frame decoder). If blocked, fall back to local vendor build (stub). -->
     <script src="https://cdn.jsdelivr.net/npm/gifuct-js@2.1.2/lib/index.js"></script>
@@ -96,6 +97,10 @@
                     <div class="canvas-container">
                         <canvas id="gifCanvas"></canvas>
                         <div id="textOverlays"></div>
+                        <button id="addTextBtn" class="add-text-button">Aa</button>
+                        <div id="deleteZone" class="delete-zone">
+                            <i class="fas fa-trash-alt"></i>
+                        </div>
                     </div>
                     
                     <div class="controls">
@@ -218,6 +223,32 @@
     <script src="gif.min.js"></script>
     <!-- Optional: host a same-origin worker file for gif.js to avoid any CDN hiccups -->
     <!-- If you add gif.worker.js locally, script.js will prefer it automatically -->
+    <script src="makeRotatable.js"></script>
     <script src="script.js"></script>
+    
+    <!-- Mobile context menu -->
+    <div id="mobileContextMenu" class="mobile-context-menu">
+        <div class="mobile-menu-item" data-action="edit">
+            <i class="fas fa-pen"></i> Edit Text
+        </div>
+        <div class="mobile-menu-item" data-action="style">
+            <i class="fas fa-paint-brush"></i> Change Style
+        </div>
+        <div class="mobile-menu-item" data-action="front">
+            <i class="fas fa-layer-group"></i> Bring to Front
+        </div>
+        <div class="mobile-menu-item" data-action="back">
+            <i class="fas fa-layer-group"></i> Send to Back
+        </div>
+        <div class="mobile-menu-item" data-action="duplicate">
+            <i class="fas fa-copy"></i> Duplicate
+        </div>
+        <div class="mobile-menu-item delete" data-action="delete">
+            <i class="fas fa-trash-alt"></i> Delete
+        </div>
+    </div>
+    
+    <!-- Touch indicator element -->
+    <div id="touchIndicator" class="touch-indicator"></div>
 </body>
 </html>

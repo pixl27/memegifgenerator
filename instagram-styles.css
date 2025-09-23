@@ -18,22 +18,35 @@
     text-align: center;
     cursor: move;
     padding: 6px;
+    touch-action: none;
+    transition: transform 0.2s ease;
+}
+
+.overlay-text-bg {
+    background-color: rgba(0, 0, 0, 0.7);
+    padding: 8px 12px;
+    border-radius: 4px;
 }
 
 .resize-handle {
     position: absolute;
-    width: 10px;
-    height: 10px;
+    width: 20px; /* Larger for touch */
+    height: 20px;
     background-color: white;
     border-radius: 50%;
     border: 1px solid #444;
     z-index: 5;
+    display: none; /* Hidden by default, show on selection */
 }
 
-.nw-resize { top: -5px; left: -5px; cursor: nw-resize; }
-.ne-resize { top: -5px; right: -5px; cursor: ne-resize; }
-.sw-resize { bottom: -5px; left: -5px; cursor: sw-resize; }
-.se-resize { bottom: -5px; right: -5px; cursor: se-resize; }
+.text-overlay.selected .resize-handle {
+    display: block;
+}
+
+.nw-resize { top: -10px; left: -10px; cursor: nw-resize; }
+.ne-resize { top: -10px; right: -10px; cursor: ne-resize; }
+.sw-resize { bottom: -10px; left: -10px; cursor: sw-resize; }
+.se-resize { bottom: -10px; right: -10px; cursor: se-resize; }
 
 .rotation-handle {
     position: absolute;
@@ -112,6 +125,7 @@
     justify-content: center;
     background: rgba(0, 0, 0, 0.7);
     z-index: 9999;
+    touch-action: none; /* Prevent default touch behaviors */
 }
 
 .instagram-text-editor {
@@ -124,27 +138,55 @@
     text-align: center;
     margin-bottom: 20px;
     max-width: 80%;
+    transition: transform 0.2s ease;
+    touch-action: manipulation;
+    -webkit-user-select: text; /* Allow text selection on mobile */
+    user-select: text;
 }
 
 .instagram-editor-toolbar {
+    position: absolute;
     display: flex;
-    gap: 20px;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
     background: rgba(0, 0, 0, 0.8);
     padding: 15px;
-    border-radius: 8px;
+    scrollbar-width: none; /* Hide scrollbar for Firefox */
+    -ms-overflow-style: none; /* Hide scrollbar for IE/Edge */
+}
+
+.instagram-editor-toolbar::-webkit-scrollbar {
+    display: none; /* Hide scrollbar for Chrome/Safari/Opera */
+}
+
+.instagram-font-toolbar {
+    top: 0;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+.instagram-color-toolbar {
+    bottom: 0;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
 }
 
 .toolbar-item {
     display: flex;
     gap: 10px;
+    padding: 0 5px;
 }
 
 .color-option {
-    width: 24px;
-    height: 24px;
-    border-radius: 12px;
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
     cursor: pointer;
     border: 2px solid rgba(255, 255, 255, 0.3);
+    transition: transform 0.2s ease;
+    margin: 0 5px;
 }
 
 .color-option.active {
@@ -153,22 +195,233 @@
 }
 
 .style-option {
-    padding: 5px 10px;
+    padding: 8px 15px;
     color: white;
     background: rgba(255, 255, 255, 0.15);
-    border-radius: 15px;
+    border-radius: 20px;
     cursor: pointer;
+    margin: 0 5px;
+    white-space: nowrap;
+    transition: background 0.2s ease;
 }
 
 .style-option.active {
     background: rgba(255, 255, 255, 0.3);
 }
 
-.font-select {
-    padding: 5px 10px;
+.font-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 15px;
+    margin: 0 8px;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+
+.font-option.active {
+    opacity: 1;
+}
+
+.font-preview {
+    font-size: 20px;
+    color: white;
+    margin-bottom: 4px;
+}
+
+.font-name {
+    font-size: 10px;
+    color: #ccc;
+}
+
+/* Alignment options */
+.align-options {
+    display: flex;
+    margin: 0 5px;
+}
+
+.align-option {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+
+.align-option.active {
+    opacity: 1;
+}
+
+/* Text background toggle */
+.text-bg-toggle {
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: rgba(255, 255, 255, 0.15);
     color: white;
+    margin: 0 5px;
+    cursor: pointer;
+}
+
+.text-bg-toggle.active {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+/* Text delete zone */
+.delete-zone {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 60px;
+    border-radius: 30px;
+    background: rgba(255, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+.delete-zone.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.delete-zone i {
+    color: white;
+    font-size: 24px;
+}
+
+/* Mobile-specific Instagram-style add text button */
+.add-text-button {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    z-index: 100;
     border: none;
-    border-radius: 15px;
-    outline: none;
+    font-size: 20px;
+}
+
+/* Animation for opening the editor */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slideUp {
+    from { transform: translateY(30px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.instagram-editor-container {
+    animation: fadeIn 0.3s ease;
+}
+
+.instagram-color-toolbar {
+    animation: slideUp 0.3s ease;
+}
+
+.instagram-font-toolbar {
+    animation: slideUp 0.3s ease;
+}
+
+/* Transition for text sizing with pinch zoom */
+.text-overlay {
+    transition: transform 0.05s ease;
+}
+
+/* Style for gradient text */
+.gradient-text {
+    background: linear-gradient(45deg, #ff0080, #ff8c00, #ffed00, #00ff80, #00bfff, #8000ff);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+}
+
+/* Style for neon text */
+.neon-text {
+    text-shadow: 0 0 5px currentColor, 0 0 10px currentColor, 0 0 15px currentColor;
+}
+
+/* Mobile touch indicator */
+.touch-indicator {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    z-index: 2000;
+    opacity: 0;
+}
+
+.touch-indicator.active {
+    opacity: 1;
+    animation: touch-pulse 0.5s ease-out;
+}
+
+@keyframes touch-pulse {
+    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0.7; }
+    100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+}
+
+/* Mobile-optimized context menu */
+.mobile-context-menu {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(20, 20, 20, 0.95);
+    border-top-left-radius: 15px;
+    border-top-right-radius: 15px;
+    padding: 20px 0;
+    z-index: 2000;
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.mobile-context-menu.visible {
+    transform: translateY(0);
+}
+
+.mobile-menu-item {
+    padding: 15px 20px;
+    color: white;
+    font-size: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+}
+
+.mobile-menu-item i {
+    margin-right: 15px;
+    width: 24px;
+    text-align: center;
+}
+
+.mobile-menu-item.delete {
+    color: #ff4d4d;
 }
