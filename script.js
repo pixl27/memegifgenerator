@@ -1,6 +1,15 @@
 class GifMemeGenerator {
     constructor() {
-    this.apiKey = localStorage.getItem('tenorApiKey') || '';
+        // Singleton pattern
+        if (GifMemeGenerator.instance) {
+            console.warn('GifMemeGenerator instance already exists');
+            return GifMemeGenerator.instance;
+        }
+        
+        console.log('Creating new GifMemeGenerator instance');
+        GifMemeGenerator.instance = this;
+        
+        this.apiKey = localStorage.getItem('tenorApiKey') || '';
         this.selectedGif = null;
         this.gifFrames = [];
         this.currentFrame = 0;
@@ -10,7 +19,13 @@ class GifMemeGenerator {
         this.canvas = null;
         this.ctx = null;
         this.gifWorker = null;
-    this.searchState = { query: '', pos: null, prevStack: [], page: 1, lastNextPos: null, limit: 20 };
+        this.searchState = { query: '', pos: null, prevStack: [], page: 1, lastNextPos: null, limit: 20 };
+        this.initialized = false;
+        this.eventHandlers = {}; // Track event handlers for cleanup
+        
+        // Initialize lock variables to prevent duplicate operations
+        this._isAddingText = false;
+        this._textOperationInProgress = false;
         
         this.init();
     }
@@ -317,31 +332,53 @@ class GifMemeGenerator {
     }
 
     init() {
-        this.setupEventListeners();
+        console.log('Initializing GifMemeGenerator');
+        
+        // Check if we're on a mobile device first (needed by other methods)
+        this.isMobileDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.userAgent.toLowerCase().includes('mobile');
+        
+        // Check if already initialized to prevent duplicate event handlers
+        if (this.initialized) {
+            console.warn('GifMemeGenerator already initialized, skipping initialization');
+            return;
+        }
+        
         this.loadApiKey();
         this.setupCanvas();
-        this.setupOverlayDeselection();
         this.setupMobileControls();
+        this.setupEventListeners();
+        this.setupOverlayDeselection();
         
-        // Check if we're on a mobile device
-        this.isMobileDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+        // Mark as initialized
+        this.initialized = true;
     }
     
     setupMobileControls() {
-        // Setup "Aa" button for adding text (Instagram style)
-        const addTextButton = document.getElementById('addTextBtn');
+        console.log('Setting up mobile controls');
+        
+        // Setup "Aa" button for adding text (Instagram style) - MOBILE SPECIFIC HANDLING
+        const addTextButton = document.getElementById('mobileAddTextBtn');
         if (addTextButton) {
-            addTextButton.addEventListener('click', (e) => {
-                if (e.target === addTextButton) { // Only if direct click on button (not delegation)
-                    e.preventDefault();
+            // Use a direct method binding and create a wrapping handler 
+            // that prevents default behavior but calls our locked addTextOverlay method
+            this.handleMobileAddText = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Mobile add text button clicked');
+                // Use the same bound method as the desktop button
+                if (this.handleAddText) {
+                    this.handleAddText();
+                } else {
+                    console.warn('handleAddText not defined yet, falling back to direct call');
                     this.addTextOverlay();
                 }
-            });
+            };
+            this.addSafeEventListener('mobileAddTextBtn', 'click', this.handleMobileAddText, 'mobile-add-text-btn');
             
             // Prevent touchmove on the button to avoid page scrolling when touching it
-            addTextButton.addEventListener('touchmove', (e) => {
+            this.addSafeEventListener('mobileAddTextBtn', 'touchmove', (e) => {
                 e.preventDefault();
-            });
+            }, 'mobile-add-text-touchmove');
         }
         
         // Setup delete zone
@@ -349,31 +386,95 @@ class GifMemeGenerator {
         if (deleteZone) {
             deleteZone.classList.remove('visible');
         }
+        
+        // Add mobile-specific class to body if on mobile
+        if (this.isMobileDevice) {
+            document.body.classList.add('mobile-device');
+        }
     }
 
+    // Helper method to safely add event listeners and track them
+    addSafeEventListener(elementId, eventType, handler, handlerId) {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+        
+        // Generate a unique ID for this handler if not provided
+        const id = handlerId || `${elementId}-${eventType}`;
+        
+        // Remove any existing handler with this ID
+        if (this.eventHandlers[id]) {
+            const oldElement = this.eventHandlers[id].element;
+            if (oldElement) {
+                oldElement.removeEventListener(eventType, this.eventHandlers[id].handler);
+            }
+        }
+        
+        // Store the new handler
+        this.eventHandlers[id] = {
+            element: element,
+            handler: handler
+        };
+        
+        // Add the event listener
+        element.addEventListener(eventType, handler);
+        
+        console.log(`Added event listener: ${id}`);
+    }
+    
     setupEventListeners() {
+        console.log('Setting up event listeners');
+        
         // API Key management
-        document.getElementById('saveKeyBtn').addEventListener('click', () => this.saveApiKey());
-        document.getElementById('apiKeyInput').addEventListener('keypress', (e) => {
+        this.addSafeEventListener('saveKeyBtn', 'click', () => this.saveApiKey());
+        this.addSafeEventListener('apiKeyInput', 'keypress', (e) => {
             if (e.key === 'Enter') this.saveApiKey();
         });
 
         // Search functionality
-        document.getElementById('searchBtn').addEventListener('click', () => this.searchGifs());
-        document.getElementById('searchInput').addEventListener('keypress', (e) => {
+        this.addSafeEventListener('searchBtn', 'click', () => this.searchGifs());
+        this.addSafeEventListener('searchInput', 'keypress', (e) => {
             if (e.key === 'Enter') this.searchGifs();
         });
-        const prevBtn = document.getElementById('prevPageBtn');
-        const nextBtn = document.getElementById('nextPageBtn');
-        if (prevBtn) prevBtn.addEventListener('click', () => this.prevSearchPage());
-        if (nextBtn) nextBtn.addEventListener('click', () => this.nextSearchPage());
+        
+        this.addSafeEventListener('prevPageBtn', 'click', () => this.prevSearchPage());
+        this.addSafeEventListener('nextPageBtn', 'click', () => this.nextSearchPage());
 
-        // Text controls
-        document.getElementById('addTextBtn').addEventListener('click', () => this.addTextOverlay());
-        document.getElementById('clearTextBtn').addEventListener('click', () => this.clearAllText());
-        document.getElementById('textInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.addTextOverlay();
+        // Text controls (for desktop UI)
+        // Bind addTextOverlay method directly to avoid duplicate handlers
+        this.handleAddText = this.addTextOverlay.bind(this);
+        this.addSafeEventListener('addTextBtn', 'click', this.handleAddText, 'add-text-btn-click');
+        
+        this.addSafeEventListener('clearTextBtn', 'click', () => this.clearAllText());
+        
+        // Create a bound handler for the enter key
+        this.handleTextInputEnter = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault(); // Prevent form submission
+                // Use the same bound method as the buttons
+                if (this.handleAddText) {
+                    this.handleAddText();
+                } else {
+                    console.warn('handleAddText not defined yet, falling back to direct call');
+                    this.addTextOverlay();
+                }
+            }
+        };
+        this.addSafeEventListener('textInput', 'keypress', this.handleTextInputEnter, 'text-input-enter');
+
+        // Font controls
+        this.addSafeEventListener('fontSize', 'input', (e) => {
+            document.getElementById('fontSizeValue').textContent = e.target.value + 'px';
         });
+        
+        this.addSafeEventListener('strokeWidth', 'input', (e) => {
+            document.getElementById('strokeWidthValue').textContent = e.target.value + 'px';
+        });
+        
+        // Emoji picker setup
+        setTimeout(() => {
+            this.setupEmojiPicker();
+            this.testEmojiPicker();
+        }, 100);
 
         // Emoji picker (setup after DOM is ready)
         setTimeout(() => {
@@ -1025,48 +1126,83 @@ class GifMemeGenerator {
     }
 
     addTextOverlay() {
-        const textInput = document.getElementById('textInput');
-        const text = textInput.value.trim();
+        console.log('addTextOverlay called with stack:', new Error().stack);
         
-        if (!text) {
-            this.showMessage('Please enter some text', 'error');
+        // Implement a lock mechanism to prevent concurrent executions
+        if (this._isAddingText === true) {
+            console.warn('Text addition already in progress, ignoring duplicate call');
             return;
         }
-
+        
+        // Set lock
+        this._isAddingText = true;
+            
+        const textInput = document.getElementById('textInput');
+        if (!textInput) {
+            console.error('Text input field not found');
+            this._isAddingText = false; // Release lock
+            return;
+        }
+        
+        let text = textInput.value.trim();
+        
         if (!this.selectedGif) {
             this.showMessage('Please select a GIF first', 'error');
+            this._isAddingText = false; // Release lock
             return;
         }
-
-        const overlay = {
-            id: Date.now(),
-            text: text,
-            x: this.canvas.width / 2,
-            y: this.canvas.height / 2,
-            fontSize: parseInt(document.getElementById('fontSize').value),
-            color: document.getElementById('textColor').value,
-            fontFamily: document.getElementById('fontFamily').value,
-            bold: document.getElementById('boldText').checked,
-            strokeWidth: parseInt(document.getElementById('strokeWidth').value),
-            strokeColor: document.getElementById('strokeColor').value,
-            rotation: 0, // Add rotation property
-            style: 'normal', // Add style property (normal, gradient, neon, etc)
-            alignment: 'center', // Text alignment
-            opacity: 1 // Opacity for text
-        };
-
-        this.textOverlays.push(overlay);
-        this.createTextOverlayElement(overlay);
-        textInput.value = '';
         
-        // Auto-select the new text for immediate editing (Instagram-like behavior)
-        const lastAddedElement = document.querySelector(`.text-overlay[data-id="${overlay.id}"]`);
-        if (lastAddedElement) {
-            this.selectTextOverlay(lastAddedElement, overlay);
-            this.editTextOverlayInline(overlay, lastAddedElement);
+        // If no text entered, use a placeholder that will be edited immediately
+        if (!text) {
+            text = "Tap to edit";
         }
-        
-        this.showMessage('Text added! Type to edit.', 'success');
+
+        try {
+            // Generate a unique ID based on timestamp and a random number
+            const uniqueId = Date.now() + '-' + Math.floor(Math.random() * 1000);
+            
+            console.log('Creating text overlay with ID:', uniqueId);
+            
+            const overlay = {
+                id: uniqueId,
+                text: text,
+                x: this.canvas.width / 2,
+                y: this.canvas.height / 2,
+                fontSize: parseInt(document.getElementById('fontSize').value) || 24,
+                color: document.getElementById('textColor').value || '#ffffff',
+                fontFamily: document.getElementById('fontFamily').value || 'Arial, sans-serif',
+                bold: document.getElementById('boldText')?.checked || false,
+                strokeWidth: parseInt(document.getElementById('strokeWidth').value) || 2,
+                strokeColor: document.getElementById('strokeColor').value || '#000000',
+                rotation: 0,
+                style: 'normal',
+                align: 'center',
+                hasBg: false,
+                opacity: 1
+            };
+
+            this.textOverlays.push(overlay);
+            this.createTextOverlayElement(overlay);
+            textInput.value = '';
+            
+            // Auto-select the new text for immediate editing (Instagram-like behavior)
+            const lastAddedElement = document.querySelector(`.text-overlay[data-id="${overlay.id}"]`);
+            if (lastAddedElement) {
+                this.selectTextOverlay(lastAddedElement, overlay);
+                this.editTextOverlayInline(overlay, lastAddedElement);
+            }
+            
+            this.showMessage('Text added! Type to edit.', 'success');
+        } catch (err) {
+            console.error('Error adding text overlay:', err);
+            this.showMessage('Error adding text. Please try again.', 'error');
+        } finally {
+            // Always release the lock, even if there's an error
+            setTimeout(() => {
+                console.log('Releasing text addition lock');
+                this._isAddingText = false;
+            }, 500); // Short delay to prevent any rapid consecutive calls
+        }
     }
 
     createTextOverlayElement(overlay) {
@@ -1596,7 +1732,8 @@ class GifMemeGenerator {
 
     // Deselect all overlays when clicking outside
     setupOverlayDeselection() {
-        document.addEventListener('click', (e) => {
+        // Create a named handler function that we can reference
+        this.overlayDeselectionHandler = (e) => {
             // Close any open context menus
             const contextMenu = document.getElementById('textContextMenu');
             if (contextMenu) {
@@ -1612,7 +1749,13 @@ class GifMemeGenerator {
                     }
                 });
             }
-        });
+        };
+        
+        // Remove any existing handler first to prevent duplicates
+        document.removeEventListener('click', this.overlayDeselectionHandler);
+        
+        // Add the new handler
+        document.addEventListener('click', this.overlayDeselectionHandler);
     }
     
     selectTextOverlay(element, overlay) {
@@ -2152,14 +2295,27 @@ class GifMemeGenerator {
 
         // Close editor and apply changes
         const finishEditing = () => {
-            const newText = textEditor.textContent.trim();
-            if (newText) {
-                overlay.text = newText;
+            try {
+                // First, remove all event handlers
+                if (typeof removeOutsideClickHandlers === 'function') {
+                    removeOutsideClickHandlers();
+                }
+                
+                const newText = textEditor.textContent.trim();
+                
+                // If text is empty, delete the overlay or use placeholder
+                if (!newText) {
+                    // Always use placeholder text - more intuitive than a confirm dialog
+                    overlay.text = "Tap to edit";
+                } else {
+                    // Update with the new text
+                    overlay.text = newText;
+                }
                 
                 // Update the overlay element
                 const textElement = element.querySelector('.overlay-text');
                 if (textElement) {
-                    textElement.textContent = newText;
+                    textElement.textContent = overlay.text;
                     
                     // Apply background if enabled
                     if (overlay.hasBg) {
@@ -2173,42 +2329,105 @@ class GifMemeGenerator {
                         textElement.style.textAlign = overlay.align;
                     }
                 }
+                
+                // Show the overlay again
+                element.style.display = 'block';
+                
+                // Check if container still exists and is in DOM before removing
+                if (editorContainer && editorContainer.parentNode) {
+                    editorContainer.parentNode.removeChild(editorContainer);
+                }
+                
+                this.drawCurrentFrame();
+                
+                // Make sure the element is selected after editing
+                this.selectTextOverlay(element, overlay);
+                
+            } catch (err) {
+                console.error('Error in finishEditing:', err);
+                // Fallback recovery - just make sure the editor is gone and element is visible
+                element.style.display = 'block';
+                if (editorContainer && editorContainer.parentNode) {
+                    editorContainer.parentNode.removeChild(editorContainer);
+                }
             }
-            
-            // Show the overlay again
+        };
+
+        // Add direct close button to the editor
+        const closeButton = document.createElement('button');
+        closeButton.className = 'instagram-editor-close-button';
+        closeButton.innerHTML = '✓';
+        closeButton.title = 'Save changes';
+        editorContainer.appendChild(closeButton);
+        
+        // Add close button event handler
+        closeButton.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            finishEditing();
+        });
+        
+        // Add cancel button to the editor
+        const cancelButton = document.createElement('button');
+        cancelButton.className = 'instagram-editor-cancel-button';
+        cancelButton.innerHTML = '×';
+        cancelButton.title = 'Cancel editing';
+        editorContainer.appendChild(cancelButton);
+        
+        // Add cancel button event handler
+        cancelButton.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // Cancel editing without saving changes
             element.style.display = 'block';
             document.body.removeChild(editorContainer);
             this.drawCurrentFrame();
-            
-            // Make sure the element is selected after editing
-            this.selectTextOverlay(element, overlay);
-        };
-
+        });
+        
         // Handle tap/click outside to close
         const handleOutsideClick = (e) => {
+            // Make sure we're not inside the editor container
             if (!editorContainer.contains(e.target)) {
+                // Cleanup event listeners first
+                removeOutsideClickHandlers();
+                // Apply the changes
                 finishEditing();
-                document.removeEventListener('click', handleOutsideClick);
-                document.removeEventListener('touchend', handleOutsideClick);
             }
         };
         
-        // Add small delay to prevent immediate closure
+        // Function to cleanly remove all event listeners
+        const removeOutsideClickHandlers = () => {
+            document.removeEventListener('mousedown', handleOutsideClick);
+            document.removeEventListener('touchstart', handleOutsideClick);
+        };
+        
+        // Add event listeners with a delay
         setTimeout(() => {
-            document.addEventListener('click', handleOutsideClick);
-            document.addEventListener('touchend', handleOutsideClick);
-        }, 300); // Slightly longer delay for mobile
+            document.addEventListener('mousedown', handleOutsideClick);
+            document.addEventListener('touchstart', handleOutsideClick);
+        }, 500);
         
         // Handle Enter key to finish editing
         textEditor.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                // Cleanup event listeners
+                if (typeof removeOutsideClickHandlers === 'function') {
+                    removeOutsideClickHandlers();
+                }
                 finishEditing();
             } else if (e.key === 'Escape') {
-                // Cancel editing
+                e.preventDefault();
+                // Cleanup event listeners
+                if (typeof removeOutsideClickHandlers === 'function') {
+                    removeOutsideClickHandlers();
+                }
+                // Cancel editing without saving changes
                 element.style.display = 'block';
-                document.body.removeChild(editorContainer);
-                element.style.display = 'block';
+                if (editorContainer && editorContainer.parentNode) {
+                    editorContainer.parentNode.removeChild(editorContainer);
+                }
+                this.drawCurrentFrame();
             }
         });
         
@@ -3306,6 +3525,15 @@ style.textContent = `
 document.head.appendChild(style);
 
 // Initialize the application when the page loads
+// Ensure we only create one instance
+let gifMemeGeneratorInstance = null;
+
 document.addEventListener('DOMContentLoaded', () => {
-    new GifMemeGenerator();
+    // Check if we already have an instance
+    if (!gifMemeGeneratorInstance) {
+        console.log('Creating new GifMemeGenerator instance');
+        gifMemeGeneratorInstance = new GifMemeGenerator();
+    } else {
+        console.log('GifMemeGenerator instance already exists');
+    }
 });
