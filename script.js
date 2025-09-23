@@ -29,6 +29,20 @@ class GifMemeGenerator {
         this._textOperationInProgress = false;
         
         this.init();
+
+        // Global click outside overlays to validate & deselect
+        document.addEventListener('mousedown', (e) => {
+            const editor = document.querySelector('.instagram-editor');
+            const overlayEl = e.target.closest && e.target.closest('.text-overlay');
+            if (overlayEl || (editor && editor.contains(e.target))) return;
+            // Commit any active editor
+            if (editor) {
+                const saveBtn = editor.querySelector('.instagram-editor-close-button');
+                if (saveBtn) saveBtn.click();
+            }
+            // Deselect overlays
+            document.querySelectorAll('.text-overlay.selected').forEach(el=>el.classList.remove('selected'));
+        });
     }
 
     setupEmojiPicker() {
@@ -2392,7 +2406,7 @@ class GifMemeGenerator {
         setTimeout(() => {
             document.addEventListener('mousedown', handleOutsideClick);
             document.addEventListener('touchstart', handleOutsideClick);
-        }, 500);
+        }, 150);
         
         // Handle Enter key to finish editing
         textEditor.addEventListener('keydown', (e) => {
